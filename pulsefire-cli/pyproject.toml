@@ -1,0 +1,41 @@
+[project]
+name = "pulsefire"
+version = "0.1.0"
+description = "Configure the HyperX Pulsefire Haste 2 Wireless mouse on Linux"
+readme = "README.md"
+authors = [
+    { name = "PMarinov1994", email = "plamen_944@outlook.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.5.0",
+]
+
+[project.scripts]
+pulsefire = "pulsefire.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.23,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+    "ruff>=0.17.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",
+    "CPY",
+    "COM812",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

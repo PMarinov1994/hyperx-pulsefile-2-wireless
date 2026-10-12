@@ -1,0 +1,5 @@
+# HyperX Pulsefire Haste 2 Wireless (dongle 03f0:0f98)
+# Give the logged-in desktop user access to the vendor config interface (USB interface 2) only.
+# Uses the properties imported by 60-persistent-hidraw.rules (usb_id); ATTRS{} keys cannot be
+# combined here because bInterfaceNumber and idVendor live on different parent devices.
+SUBSYSTEM=="hidraw", ENV{ID_USB_VENDOR_ID}=="03f0", ENV{ID_USB_MODEL_ID}=="0f98", ENV{ID_USB_INTERFACE_NUM}=="02", TAG+="uaccess"

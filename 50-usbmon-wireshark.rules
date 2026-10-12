@@ -1,0 +1,2 @@
+# Let members of the "wireshark" group capture USB traffic (usbmon) without sudo.
+SUBSYSTEM=="usbmon", GROUP="wireshark", MODE="0640"
