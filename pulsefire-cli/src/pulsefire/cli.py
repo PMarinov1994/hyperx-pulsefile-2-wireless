@@ -6,32 +6,52 @@ from contextlib import contextmanager
 import click
 
 from pulsefire import __version__
+from pulsefire import lighting as effects
+from pulsefire.buttons import (
+    ACTIONS,
+    Action,
+    Assignment,
+    Button,
+    is_default,
+    parse_action,
+)
 from pulsefire.colors import Rgb
-from pulsefire.device import DeviceError, Dongle
+from pulsefire.device import DeviceError, Dongle, Tracer
 from pulsefire.protocol import (
+    ACK_COMMAND_OFFSET,
+    ACK_REPORT,
+    ACK_STATUS_OFFSET,
+    ACK_SUB,
+    BATTERY_ALERT_MAX,
+    BATTERY_ALERT_MIN,
+    LIVE_SLOT,
     MAX_STAGES,
+    SAVED_SLOT,
     BatteryEvent,
     ButtonEvent,
-    Command,
     DpiStage,
     DpiStageEvent,
+    DpiTable,
     Event,
     LiftOff,
+    LightingEffect,
+    LightingMode,
     LinkEvent,
     PollingRate,
-    encode_brightness,
-    encode_dpi_table,
+    SensorSettings,
+    brightness_to_percent,
     encode_live_color,
-    encode_sensor,
     parse_event,
+    percent_to_brightness,
     validate_dpi,
 )
-from pulsefire.settings import SETTINGS_FILE, Settings, load_settings, save_settings
 
 STREAM_INTERVAL = 1 / 15
+MIN_SHOWN_BYTES = 4
 DEFAULT_STAGE_COLOR = Rgb(0xFF, 0xFF, 0xFF)
 STAGE = click.IntRange(1, MAX_STAGES)
 PERCENT = click.IntRange(0, 100)
+BUTTON = click.Choice([button.label for button in Button], case_sensitive=False)
 
 
 class ColorType(click.ParamType[Rgb]):
@@ -65,72 +85,192 @@ class DpiType(click.ParamType[int]):
 COLOR = ColorType()
 DPI = DpiType()
 
+save_option = click.option(
+    "--save",
+    is_flag=True,
+    help="Also store the change in the mouse's onboard memory so it survives a power cycle.",
+)
+speed_option = click.option(
+    "-s",
+    "--speed",
+    type=PERCENT,
+    default=effects.DEFAULT_SPEED,
+    show_default=True,
+    help="Effect speed in percent, like NGENUITY's speed slider.",
+)
+saved_option = click.option(
+    "--saved",
+    is_flag=True,
+    help="Show the profile stored in the mouse's onboard memory instead of the live settings.",
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class Options:
+    verbose: bool = False
+
+
+def describe_packet(packet: bytes) -> str:
+    length = max(len(packet.rstrip(b"\x00")), MIN_SHOWN_BYTES)
+    text = packet[:length].hex(" ") + (" …" if length < len(packet) else "")
+    if packet[0] == ACK_REPORT and packet[1] == ACK_SUB and len(packet) > ACK_STATUS_OFFSET:
+        command = packet[ACK_COMMAND_OFFSET : ACK_COMMAND_OFFSET + 2].hex(" ")
+        sender = packet[2:ACK_COMMAND_OFFSET].hex()
+        status = packet[ACK_STATUS_OFFSET]
+        text += f"  (ACK {command}, status {status:02x}, from {sender})"
+    return text
+
+
+def echo_packet(direction: str, packet: bytes) -> None:
+    now = time.time()
+    stamp = f"{time.strftime('%H:%M:%S', time.localtime(now))}.{int(now * 1000) % 1000:03d}"
+    arrow = "->" if direction == "send" else "<-"
+    click.secho(f"{stamp} {arrow} {describe_packet(packet)}", fg="cyan", err=True)
+
+
+def packet_tracer() -> Tracer | None:
+    options = click.get_current_context().find_object(Options)
+    return echo_packet if options is not None and options.verbose else None
+
 
 @contextmanager
 def open_dongle() -> Iterator[Dongle]:
     try:
-        with Dongle.open() as dongle:
+        with Dongle.open(trace=packet_tracer()) as dongle:
             yield dongle
     except DeviceError as error:
         raise click.ClickException(str(error)) from error
 
 
-def warn_if_asleep(dongle: Dongle) -> None:
-    if not dongle.is_mouse_connected():
+@contextmanager
+def open_mouse() -> Iterator[Dongle]:
+    with open_dongle() as dongle:
+        if not dongle.is_mouse_connected():
+            msg = "Mouse is asleep or switched off. Move it and try again."
+            raise click.ClickException(msg)
+        yield dongle
+
+
+def target_slots(*, save: bool) -> tuple[int, ...]:
+    return (LIVE_SLOT, SAVED_SLOT) if save else (LIVE_SLOT,)
+
+
+def slot_name(slot: int) -> str:
+    return "saved profile" if slot == SAVED_SLOT else "live settings"
+
+
+def warn_mismatch(what: str, slot: int, expected: object, actual: object) -> None:
+    if expected != actual:
         click.secho(
-            "Mouse is asleep or switched off: the change is queued until it wakes up.",
+            f"Warning: the mouse reports a different {what} in its {slot_name(slot)}.",
             fg="yellow",
             err=True,
         )
 
 
-def send_dpi(dongle: Dongle, settings: Settings) -> None:
-    packet = encode_dpi_table(settings.stages, settings.active_stage, settings.polling_rate)
-    dongle.execute(Command.DPI_TABLE, packet)
+def saved_note(*, save: bool) -> str:
+    return " Saved to the mouse's memory." if save else ""
 
 
-def send_lift_off(dongle: Dongle, settings: Settings) -> None:
-    dongle.execute(Command.SENSOR, encode_sensor(settings.lift_off))
+def write_dpi_table(dongle: Dongle, table: DpiTable, *, save: bool) -> None:
+    for slot in target_slots(save=save):
+        dongle.set_dpi_table(table, slot)
+        warn_mismatch("DPI table", slot, table, dongle.dpi_table(slot))
 
 
-def send_brightness(dongle: Dongle, settings: Settings) -> None:
-    dongle.execute(Command.BRIGHTNESS, encode_brightness(settings.brightness))
+def write_sensor(dongle: Dongle, settings: SensorSettings, *, save: bool) -> None:
+    for slot in target_slots(save=save):
+        dongle.set_sensor(settings, slot)
+        warn_mismatch("lift-off distance", slot, settings, dongle.sensor(slot))
 
 
-def update_dpi(settings: Settings) -> None:
-    with open_dongle() as dongle:
-        warn_if_asleep(dongle)
-        send_dpi(dongle, settings)
-    save_settings(settings)
+def write_brightness(dongle: Dongle, percent: int, *, save: bool) -> None:
+    for slot in target_slots(save=save):
+        dongle.set_brightness(percent, slot)
+        warn_mismatch("brightness", slot, percent_to_brightness(percent), dongle.brightness(slot))
 
 
-def stage_index(settings: Settings, stage: int) -> int:
-    if stage > len(settings.stages):
-        msg = f"stage {stage} does not exist, there are {len(settings.stages)} stages"
+def write_assignments(dongle: Dongle, assignments: list[Assignment], *, save: bool) -> None:
+    for slot in target_slots(save=save):
+        dongle.set_key_assignments(assignments, slot)
+        warn_mismatch(
+            "button assignment", slot, set(assignments), set(dongle.key_assignments(slot))
+        )
+
+
+def parse_button_action(text: str | None) -> Action | None:
+    if text is None:
+        msg = "missing ACTION, e.g. 'pulsefire button back forward' or '... back default'"
+        raise click.UsageError(msg)
+    if text.strip().lower() == "default":
+        return None
+    try:
+        return parse_action(text)
+    except ValueError as error:
+        raise click.BadParameter(str(error), param_hint="ACTION") from error
+
+
+def stage_index(table: DpiTable, stage: int) -> int:
+    if stage > len(table.stages):
+        msg = f"stage {stage} does not exist, there are {len(table.stages)} stages"
         raise click.BadParameter(msg, param_hint="STAGE")
     return stage - 1
 
 
-def echo_dpi_table(settings: Settings) -> None:
+def echo_dpi_table(table: DpiTable) -> None:
     click.echo("   Stage    DPI  Colour")
-    for index, stage in enumerate(settings.stages):
-        marker = "*" if index == settings.active_stage else " "
+    for index, stage in enumerate(table.stages):
+        marker = "*" if index == table.active_stage else " "
         click.echo(f" {marker} {index + 1:>5}  {stage.dpi:>5}  {stage.color.describe()}")
-    click.echo(f"Polling rate: {int(settings.polling_rate)} Hz")
+    click.echo(f"Polling rate: {int(table.polling_rate)} Hz")
+
+
+def echo_assignments(assignments: list[Assignment]) -> None:
+    remapped = [assignment for assignment in assignments if not is_default(assignment)]
+    if not remapped:
+        click.echo("Buttons:      all on their default actions")
+        return
+    click.echo("Buttons:")
+    for assignment in remapped:
+        click.echo(f"  {assignment.button_label:<8} -> {assignment.action.label}")
+
+
+def describe_event(event: Event) -> str:
+    match event:
+        case LinkEvent(connected=True):
+            return "mouse woke up / connected"
+        case LinkEvent():
+            return "mouse asleep / disconnected"
+        case DpiStageEvent(stage=stage, dpi=value):
+            return f"DPI stage {stage + 1}: {value} DPI"
+        case ButtonEvent(button=button, pressed=pressed):
+            return f"button {button:#04x} {'pressed' if pressed else 'released'}"
+        case BatteryEvent(battery=battery):
+            return f"battery {battery.level} % ({battery.charge.label})"
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(__version__, prog_name="pulsefire")
-def main() -> None:
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Print every packet sent to (->) and received from (<-) the dongle on stderr.",
+)
+@click.pass_context
+def main(ctx: click.Context, *, verbose: bool) -> None:
     """Configure a HyperX Pulsefire Haste 2 Wireless mouse (USB dongle 03f0:0f98).
 
-    Changes are applied live to the mouse. They are not written to the
-    profile that NGENUITY saves on the mouse.
+    Settings are read from the mouse, so the mouse has to be awake: move it
+    if a command says it is asleep.
 
-    The mouse cannot report its current settings, so pulsefire remembers the
-    last values it sent and shows those. Run "pulsefire apply" to send them
-    all again.
+    Changes are applied live. Add --save to a command to also store the
+    change in the mouse's onboard memory (the profile NGENUITY saves), so it
+    survives a power cycle.
+
+    Use -v before the command to see the raw packets, e.g. 'pulsefire -v status'.
     """
+    ctx.obj = Options(verbose=verbose)
 
 
 @main.command()
@@ -150,25 +290,24 @@ def status() -> None:
 
 
 @main.command()
-def show() -> None:
-    """Show all settings pulsefire last sent to the mouse."""
-    settings = load_settings()
-    echo_dpi_table(settings)
-    click.echo(f"Lift-off:     {settings.lift_off.label}")
-    click.echo(f"Brightness:   {settings.brightness} %")
-    click.echo(f"Stored in:    {SETTINGS_FILE}")
-
-
-@main.command()
-def apply() -> None:
-    """Send all remembered settings to the mouse again."""
-    settings = load_settings()
-    with open_dongle() as dongle:
-        warn_if_asleep(dongle)
-        send_dpi(dongle, settings)
-        send_lift_off(dongle, settings)
-        send_brightness(dongle, settings)
-    click.echo("Sent DPI stages, polling rate, lift-off and brightness.")
+@saved_option
+def show(*, saved: bool) -> None:
+    """Show all settings: DPI stages, polling rate, lift-off, brightness,
+    lighting effect and remapped buttons.
+    """
+    slot = SAVED_SLOT if saved else LIVE_SLOT
+    with open_mouse() as dongle:
+        table = dongle.dpi_table(slot)
+        sensor = dongle.sensor(slot)
+        brightness = dongle.brightness(slot)
+        lighting = dongle.lighting(slot)
+        assignments = dongle.key_assignments(slot)
+    click.echo(f"[{slot_name(slot)}]")
+    echo_dpi_table(table)
+    click.echo(f"Lift-off:     {sensor.lift_off.label}")
+    click.echo(f"Brightness:   {brightness_to_percent(brightness)} %")
+    click.echo(f"Lighting:     {lighting.label}")
+    echo_assignments(assignments)
 
 
 @main.group(invoke_without_command=True)
@@ -176,139 +315,359 @@ def apply() -> None:
 def dpi(ctx: click.Context) -> None:
     """Show or change the DPI stages (cycled with the button under the wheel).
 
-    Stages are numbered from 1. The active stage is marked with *. If you
-    pressed the DPI button since pulsefire last ran, any DPI change also
-    switches back to the active stage shown here; "pulsefire watch" keeps
-    it in sync.
+    Stages are numbered from 1 and the active stage is marked with *.
+    Each change reads the current table from the mouse first, so the other
+    stages and the active stage stay as they are. With --save the whole
+    resulting table is stored in the mouse's memory.
     """
     if ctx.invoked_subcommand is None:
-        echo_dpi_table(load_settings())
+        with open_mouse() as dongle:
+            table = dongle.dpi_table()
+        echo_dpi_table(table)
 
 
 @dpi.command("set")
 @click.argument("stage", type=STAGE)
 @click.argument("value", type=DPI)
-def dpi_set(stage: int, value: int) -> None:
+@save_option
+def dpi_set(stage: int, value: int, *, save: bool) -> None:
     """Set the DPI of STAGE to VALUE (100-26000 in steps of 50).
 
     Example: pulsefire dpi set 3 1600
     """
-    settings = load_settings()
-    index = stage_index(settings, stage)
-    stages = list(settings.stages)
-    stages[index] = dataclasses.replace(stages[index], dpi=value)
-    update_dpi(dataclasses.replace(settings, stages=stages))
-    click.echo(f"Stage {stage} is now {value} DPI.")
+    with open_mouse() as dongle:
+        table = dongle.dpi_table()
+        index = stage_index(table, stage)
+        current = table.stages[index]
+        changed = table.replace_stage(index, dataclasses.replace(current, dpi=value))
+        write_dpi_table(dongle, changed, save=save)
+    click.echo(f"Stage {stage} is now {value} DPI (was {current.dpi}).{saved_note(save=save)}")
 
 
 @dpi.command("color")
 @click.argument("stage", type=STAGE)
 @click.argument("colour", type=COLOR)
-def dpi_color(stage: int, colour: Rgb) -> None:
+@save_option
+def dpi_color(stage: int, colour: Rgb, *, save: bool) -> None:
     """Set the indicator colour of STAGE.
 
     COLOUR is a name (red, green, blue, yellow, cyan, magenta, orange, purple,
     pink, white, off) or a hex value such as #ff8000.
     """
-    settings = load_settings()
-    index = stage_index(settings, stage)
-    stages = list(settings.stages)
-    stages[index] = dataclasses.replace(stages[index], color=colour)
-    update_dpi(dataclasses.replace(settings, stages=stages))
-    click.echo(f"Stage {stage} colour is now {colour.describe()}.")
+    with open_mouse() as dongle:
+        table = dongle.dpi_table()
+        index = stage_index(table, stage)
+        current = table.stages[index]
+        changed = table.replace_stage(index, dataclasses.replace(current, color=colour))
+        write_dpi_table(dongle, changed, save=save)
+    click.echo(f"Stage {stage} colour is now {colour.describe()}.{saved_note(save=save)}")
 
 
 @dpi.command("select")
 @click.argument("stage", type=STAGE)
-def dpi_select(stage: int) -> None:
+@save_option
+def dpi_select(stage: int, *, save: bool) -> None:
     """Make STAGE the active DPI stage."""
-    settings = load_settings()
-    index = stage_index(settings, stage)
-    update_dpi(dataclasses.replace(settings, active_stage=index))
-    click.echo(f"Stage {stage} ({settings.stages[index].dpi} DPI) is now active.")
+    with open_mouse() as dongle:
+        table = dongle.dpi_table()
+        index = stage_index(table, stage)
+        write_dpi_table(dongle, dataclasses.replace(table, active_stage=index), save=save)
+    click.echo(
+        f"Stage {stage} ({table.stages[index].dpi} DPI) is now active.{saved_note(save=save)}"
+    )
 
 
 @dpi.command("add")
 @click.argument("value", type=DPI)
 @click.argument("colour", type=COLOR, default=DEFAULT_STAGE_COLOR.hex)
-def dpi_add(value: int, colour: Rgb) -> None:
+@save_option
+def dpi_add(value: int, colour: Rgb, *, save: bool) -> None:
     """Add a new last stage with VALUE DPI and an optional COLOUR (default white)."""
-    settings = load_settings()
-    if len(settings.stages) >= MAX_STAGES:
-        msg = f"the mouse supports at most {MAX_STAGES} stages"
-        raise click.ClickException(msg)
-    stages = [*settings.stages, DpiStage(value, colour)]
-    update_dpi(dataclasses.replace(settings, stages=stages))
-    click.echo(f"Added stage {len(stages)}: {value} DPI, {colour.describe()}.")
+    with open_mouse() as dongle:
+        table = dongle.dpi_table()
+        if len(table.stages) >= MAX_STAGES:
+            msg = f"the mouse supports at most {MAX_STAGES} stages"
+            raise click.ClickException(msg)
+        stages = (*table.stages, DpiStage(value, colour))
+        write_dpi_table(dongle, dataclasses.replace(table, stages=stages), save=save)
+    click.echo(
+        f"Added stage {len(stages)}: {value} DPI, {colour.describe()}.{saved_note(save=save)}"
+    )
 
 
 @dpi.command("remove")
 @click.argument("stage", type=STAGE)
-def dpi_remove(stage: int) -> None:
+@save_option
+def dpi_remove(stage: int, *, save: bool) -> None:
     """Remove STAGE; the stages after it move up by one."""
-    settings = load_settings()
-    index = stage_index(settings, stage)
-    if len(settings.stages) == 1:
-        msg = "the last remaining stage cannot be removed"
-        raise click.ClickException(msg)
-    stages = [item for position, item in enumerate(settings.stages) if position != index]
-    active = settings.active_stage
-    if active > index or active == len(stages):
-        active -= 1
-    update_dpi(dataclasses.replace(settings, stages=stages, active_stage=active))
-    click.echo(f"Removed stage {stage}.")
+    with open_mouse() as dongle:
+        table = dongle.dpi_table()
+        index = stage_index(table, stage)
+        if len(table.stages) == 1:
+            msg = "the last remaining stage cannot be removed"
+            raise click.ClickException(msg)
+        stages = tuple(item for position, item in enumerate(table.stages) if position != index)
+        active = table.active_stage
+        if active > index or active == len(stages):
+            active -= 1
+        write_dpi_table(dongle, DpiTable(table.polling_rate, active, stages), save=save)
+    click.echo(f"Removed stage {stage}.{saved_note(save=save)}")
 
 
 @main.command()
 @click.argument("rate", type=click.Choice([str(int(rate)) for rate in PollingRate]), required=False)
-def polling(rate: str | None) -> None:
+@save_option
+def polling(rate: str | None, *, save: bool) -> None:
     """Show or set the polling rate in Hz (125, 250, 500 or 1000).
 
-    Example: pulsefire polling 1000
+    Example: pulsefire polling 1000 --save
     """
-    settings = load_settings()
-    if rate is None:
-        click.echo(f"Polling rate: {int(settings.polling_rate)} Hz")
-        return
-    update_dpi(dataclasses.replace(settings, polling_rate=PollingRate(int(rate))))
-    click.echo(f"Polling rate is now {rate} Hz.")
+    with open_mouse() as dongle:
+        table = dongle.dpi_table()
+        if rate is None:
+            click.echo(f"Polling rate: {int(table.polling_rate)} Hz")
+            return
+        changed = dataclasses.replace(table, polling_rate=PollingRate(int(rate)))
+        write_dpi_table(dongle, changed, save=save)
+    click.echo(
+        f"Polling rate is now {rate} Hz (was {int(table.polling_rate)} Hz).{saved_note(save=save)}"
+    )
 
 
 @main.command()
 @click.argument(
     "distance", type=click.Choice(["low", "high"], case_sensitive=False), required=False
 )
-def liftoff(distance: str | None) -> None:
+@save_option
+def liftoff(distance: str | None, *, save: bool) -> None:
     """Show or set the lift-off distance: low (1 mm) or high (2 mm)."""
-    settings = load_settings()
-    if distance is None:
-        click.echo(f"Lift-off: {settings.lift_off.label}")
-        return
-    settings = dataclasses.replace(settings, lift_off=LiftOff[distance.upper()])
-    with open_dongle() as dongle:
-        warn_if_asleep(dongle)
-        send_lift_off(dongle, settings)
-    save_settings(settings)
-    click.echo(f"Lift-off is now {settings.lift_off.label}.")
+    with open_mouse() as dongle:
+        sensor = dongle.sensor()
+        if distance is None:
+            click.echo(f"Lift-off: {sensor.lift_off.label}")
+            return
+        changed = dataclasses.replace(sensor, lift_off=LiftOff[distance.upper()])
+        write_sensor(dongle, changed, save=save)
+    click.echo(f"Lift-off is now {changed.lift_off.label}.{saved_note(save=save)}")
+
+
+@main.command("battery-alert")
+@click.argument("percent", type=click.IntRange(BATTERY_ALERT_MIN, BATTERY_ALERT_MAX))
+@save_option
+def battery_alert(percent: int, *, save: bool) -> None:
+    """Set the battery level (5-25 %) at which the mouse warns that it is low.
+
+    NGENUITY uses 10 % by default. The mouse cannot report the current value,
+    so this command only sets it.
+
+    Example: pulsefire battery-alert 10 --save
+    """
+    with open_mouse() as dongle:
+        dongle.set_battery_alert(percent, save=save)
+    click.echo(f"Low-battery alert is now at {percent} %.{saved_note(save=save)}")
 
 
 @main.command()
 @click.argument("percent", type=PERCENT, required=False)
-def brightness(percent: int | None) -> None:
+@save_option
+def brightness(percent: int | None, *, save: bool) -> None:
     """Show or set the LED brightness in percent (0 turns the LED off).
 
     Example: pulsefire brightness 50
     """
-    settings = load_settings()
-    if percent is None:
-        click.echo(f"Brightness: {settings.brightness} %")
+    with open_mouse() as dongle:
+        if percent is None:
+            click.echo(f"Brightness: {brightness_to_percent(dongle.brightness())} %")
+            return
+        write_brightness(dongle, percent, save=save)
+    click.echo(f"Brightness is now {percent} %.{saved_note(save=save)}")
+
+
+@main.command()
+@click.argument("name", metavar="BUTTON", type=BUTTON, required=False)
+@click.argument("action_name", metavar="ACTION", required=False)
+@save_option
+@saved_option
+@click.option("--force", is_flag=True, help="Allow remapping the left button.")
+def button(
+    name: str | None, action_name: str | None, *, save: bool, saved: bool, force: bool
+) -> None:
+    """Show the remapped buttons, or assign ACTION to BUTTON.
+
+    BUTTON is one of: left, right, middle, back, forward, dpi.
+
+    ACTION is one of:
+
+    \b
+      default                      restore the button's own function
+      left, right, middle,
+      back, forward                act as that mouse button
+      disable                      do nothing
+      dpi-up, dpi-down, dpi-next,
+      dpi-previous, dpi-clutch     DPI functions
+      next-app, previous-app       switch applications
+      play-pause, next-track, previous-track, stop,
+      mute, volume-up, volume-down media keys
+      calculator, mail, search, browser-home, browser-back,
+      browser-forward, browser-refresh
+      key:NAME                     a keyboard key, e.g. key:a, key:f5,
+                                   key:enter, key:left-ctrl, key:page-up
+
+    Examples:
+
+    \b
+      pulsefire button back forward
+      pulsefire button forward volume-up --save
+      pulsefire button forward default --save
+    """
+    if name is None:
+        slot = SAVED_SLOT if saved else LIVE_SLOT
+        with open_mouse() as dongle:
+            assignments = dongle.key_assignments(slot)
+        click.echo(f"[{slot_name(slot)}]")
+        echo_assignments(assignments)
         return
-    settings = dataclasses.replace(settings, brightness=percent)
-    with open_dongle() as dongle:
-        warn_if_asleep(dongle)
-        send_brightness(dongle, settings)
-    save_settings(settings)
-    click.echo(f"Brightness is now {percent} %.")
+    target = Button[name.upper()]
+    action = parse_button_action(action_name)
+    if target is Button.LEFT and not force and action != ACTIONS["left"]:
+        msg = "remapping the left button can leave you without a left click; add --force"
+        raise click.ClickException(msg)
+    with open_mouse() as dongle:
+        current = [item for item in dongle.key_assignments() if item.button != target]
+        if action is not None:
+            current.append(Assignment(target, action))
+        assignments = [item for item in current if not is_default(item)]
+        write_assignments(dongle, assignments, save=save)
+    label = "its default action" if action is None else action.label
+    click.echo(f"The {target.label} button now does {label}.{saved_note(save=save)}")
+
+
+def upload_effect(colors: list[Rgb], speed: int, name: str, *, save: bool) -> None:
+    expected = LightingEffect(LightingMode.FRAME_LIGHT, speed)
+    with open_mouse() as dongle:
+        for slot in target_slots(save=save):
+            click.echo(f"Uploading {name} to the {slot_name(slot)}...")
+            dongle.set_frame_light(colors, speed, slot)
+            warn_mismatch("lighting effect", slot, expected, dongle.lighting(slot))
+    click.echo(f"Lighting is now {name}.{saved_note(save=save)}")
+
+
+def require_colors(colours: tuple[Rgb, ...]) -> None:
+    if len(colours) == 1:
+        msg = "give at least two colours, or none for NGENUITY's default gradient"
+        raise click.BadParameter(msg, param_hint="COLOURS")
+
+
+@main.group(invoke_without_command=True)
+@saved_option
+@click.pass_context
+def lighting(ctx: click.Context, *, saved: bool) -> None:
+    """Show or change the lighting effect the mouse plays by itself.
+
+    These are NGENUITY's software effects for this mouse, rendered the same
+    way NGENUITY's light engine renders them and stored on the mouse as one
+    looping cycle of colour frames. Use --save to keep the effect after a
+    power cycle; brightness is set separately with 'pulsefire brightness'.
+
+    COLOUR is a name (red, green, blue, yellow, cyan, magenta, orange, purple,
+    pink, white, off) or a hex value such as #ff8000.
+    """
+    if ctx.invoked_subcommand is None:
+        slot = SAVED_SLOT if saved else LIVE_SLOT
+        with open_mouse() as dongle:
+            effect = dongle.lighting(slot)
+        click.echo(f"[{slot_name(slot)}]")
+        click.echo(f"Lighting: {effect.label}")
+
+
+@lighting.command("solid")
+@click.argument("colour", type=COLOR)
+@save_option
+def lighting_solid(colour: Rgb, *, save: bool) -> None:
+    """Show one solid COLOUR.
+
+    Example: pulsefire lighting solid purple --save
+    """
+    upload_effect(
+        effects.solid(colour), effects.DEFAULT_SPEED, f"solid {colour.describe()}", save=save
+    )
+
+
+@lighting.command("breathing")
+@click.argument("colour", type=COLOR)
+@speed_option
+@save_option
+def lighting_breathing(colour: Rgb, speed: int, *, save: bool) -> None:
+    """Fade COLOUR in and out."""
+    upload_effect(effects.breathing(colour), speed, f"breathing {colour.describe()}", save=save)
+
+
+@lighting.command("alternating")
+@click.argument("first", metavar="COLOUR1", type=COLOR)
+@click.argument("second", metavar="COLOUR2", type=COLOR)
+@click.option("--gradient", is_flag=True, help="Fade between the colours instead of switching.")
+@speed_option
+@save_option
+def lighting_alternating(
+    first: Rgb, second: Rgb, speed: int, *, gradient: bool, save: bool
+) -> None:
+    """Switch between COLOUR1 and COLOUR2."""
+    colors = effects.alternating(first, second, gradient=gradient)
+    upload_effect(colors, speed, f"alternating {first.describe()} / {second.describe()}", save=save)
+
+
+@lighting.command("confetti")
+@speed_option
+@save_option
+def lighting_confetti(speed: int, *, save: bool) -> None:
+    """Blend through random colours."""
+    upload_effect(effects.confetti(), speed, "confetti", save=save)
+
+
+@lighting.command("spectrum")
+@click.argument("colours", nargs=-1, type=COLOR)
+@speed_option
+@save_option
+def lighting_spectrum(colours: tuple[Rgb, ...], speed: int, *, save: bool) -> None:
+    """Blend from one colour to the next (NGENUITY's Spectrum Wave).
+
+    Without COLOURS it uses NGENUITY's default gradient.
+
+    Example: pulsefire lighting spectrum red green blue
+    """
+    require_colors(colours)
+    colors = list(colours) or [color for _, color in effects.GRADIENT]
+    upload_effect(effects.spectrum(colors), speed, "spectrum wave", save=save)
+
+
+@lighting.command("wave")
+@click.argument("colours", nargs=-1, type=COLOR)
+@speed_option
+@save_option
+def lighting_wave(colours: tuple[Rgb, ...], speed: int, *, save: bool) -> None:
+    """Move through a colour gradient (NGENUITY's Wave).
+
+    Without COLOURS it uses NGENUITY's default gradient.
+    """
+    require_colors(colours)
+    stops = effects.even_stops(colours) if colours else effects.GRADIENT
+    upload_effect(effects.wave(stops), speed, "wave", save=save)
+
+
+@lighting.command("sunrise")
+@speed_option
+@save_option
+def lighting_sunrise(speed: int, *, save: bool) -> None:
+    """Warm sunrise colours (one of NGENUITY's three Sunrise gradients, picked at random)."""
+    upload_effect(effects.sunrise(), speed, "sunrise", save=save)
+
+
+@lighting.command("rainbow")
+@speed_option
+@save_option
+def lighting_rainbow(speed: int, *, save: bool) -> None:
+    """Restore the colour cycle NGENUITY stored on the mouse (exact copy)."""
+    upload_effect(effects.rainbow(), speed, "rainbow colour cycle", save=save)
 
 
 @main.command()
@@ -334,8 +693,7 @@ def color(colour: Rgb, seconds: float | None) -> None:
     packet = encode_live_color(colour)
     deadline = None if seconds is None else time.monotonic() + seconds
     hint = f"for {seconds:g} s" if seconds is not None else "press Ctrl+C to stop"
-    with open_dongle() as dongle:
-        warn_if_asleep(dongle)
+    with open_mouse() as dongle:
         click.echo(f"Showing {colour.describe()}, {hint}.")
         try:
             while deadline is None or time.monotonic() < deadline:
@@ -351,7 +709,7 @@ def watch() -> None:
     """Print mouse events as they happen until Ctrl+C is pressed.
 
     Shows wake/sleep, DPI button presses with the new stage, and battery
-    reports. The active DPI stage pulsefire remembers is updated to match.
+    reports.
     """
     click.echo("Watching the mouse, press Ctrl+C to stop.")
     with open_dongle() as dongle:
@@ -363,27 +721,5 @@ def watch() -> None:
                 event = parse_event(report)
                 if event is not None:
                     click.echo(f"{time.strftime('%H:%M:%S')}  {describe_event(event)}")
-                if isinstance(event, DpiStageEvent):
-                    remember_active_stage(event)
         except KeyboardInterrupt:
             pass
-
-
-def describe_event(event: Event) -> str:
-    match event:
-        case LinkEvent(connected=True):
-            return "mouse woke up / connected"
-        case LinkEvent():
-            return "mouse asleep / disconnected"
-        case DpiStageEvent(stage=stage, dpi=value):
-            return f"DPI stage {stage + 1}: {value} DPI"
-        case ButtonEvent(button=button, pressed=pressed):
-            return f"button {button:#04x} {'pressed' if pressed else 'released'}"
-        case BatteryEvent(battery=battery):
-            return f"battery {battery.level} % ({battery.charge.label})"
-
-
-def remember_active_stage(event: DpiStageEvent) -> None:
-    settings = load_settings()
-    if event.stage < len(settings.stages) and event.stage != settings.active_stage:
-        save_settings(dataclasses.replace(settings, active_stage=event.stage))

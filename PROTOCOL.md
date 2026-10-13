@@ -35,78 +35,130 @@ Key functions in the hub (Ghidra, image base 0x140000000):
   `(target << 6) | (sub & 0x3F)`. This is probably dongle (0) vs. mouse (1). Not yet confirmed.
 * Multi-packet transfers use pages of 15 entries × 4 bytes. Page count = `ceil(n/15)`, computed as `(n+14)/15`.
 
-## 3. Command map (all request kinds the universal protocol knows)
+## 3. Command map (complete, extracted from the hub binary)
 
-`idx` = internal Rust request-kind index (the tables in §1). **Bold** = command ID that exists
-in the Haste 2 Wireless report descriptor. Payload offsets are byte offsets in the 64-byte packet.
-The names come from the matching FlatBuffers messages, so they are best guesses until the probe confirms them.
+**How it was extracted.**
+- Every request handler gets its report ID from `universal_kind_to_cmd` (table at `0x14048bb70`) and its sub-command from `universal_kind_to_sub` (table at `0x14048bbaa`).
+- Each lookup takes its **own** index byte. Some handlers pass the same index to both lookups and some pass two different ones (the DPI handler uses `0x11`/`0x19` → `32 01`). The first version of this table assumed one index for both, which is why it was wrong.
+- A capstone sweep of the whole `.text` section records the actual argument of every lookup call. Each call site was then matched to its dispatcher case.
+- The frame-upload handler (case `0x23`) writes `44 03`/`44 04`/`42 02` as literal constants and was read from its decompiled code.
+- Names come from the order of the dispatcher cases. That order follows the FlatBuffers `CommandData` request types, and the payload shapes match the fields of each type.
+- ✔ = confirmed in a capture or from Linux.
 
-| cmd | sub | dispatcher case → handler | Request payload (from handler) | Probable meaning |
-|---|---|---|---|---|
-| **10** | 01 | 0x00 → `1401791c0` | none | Get DeviceInformation |
-| **10** | 02 | 0x01 → `140178ec0` | none | Get DeviceSerialNumber |
-| **12** | 01 | 0x02 → `140154e80` | [2]=u8 | **DeviceFactoryReset — never send in probing** |
-| **14** | 01 | 0x03 → `140153460` | [2..3]=u16 profile, [4]=u8, [5]=u8 | CurrentProfileSetup (reset_profile, reset_state, switching_profile) |
-| **14** | 02 | 0x04 → `140154800` | none | Get CurrentProfileInformation |
-| **20** | 01 | 0x05/0x06 → `140153510`/`140154890` | [2..3]=u16 profile, [4]=page count, [5]=u8, [6]=n entries | DPISettings header |
-| **20** | 02 | 0x06 → `140154890` | [2]=page idx, [3]=0, [4..63]=up to 15 × 4-byte entries | DPISettings data pages (see §4) |
-| **20** | 03 | 0x07 → `140154f20` | [2],[3] = u16 (profile) | Get DPISettingsInformation |
-| **20** | 04 | 0x08 → `1401559a0` | [2]=u8, [3]=page idx (one packet per page) | Get DPI data pages |
-| **20** | 05 | 0x09 → `140155b90` | [2..3]=u16 profile, [4]=u8 | DPI/sensor single setting (polling rate?) |
-| **22** | 01..03 | 0x0a–0x0c → `1401535e0`… | paged: [2]=page,[3]=pages,[4]=n, entries 4 B `(key, type, u16 code)` | GeneralKeyAssignment (button remap) |
-| **22** | 04 | 0x0d → `140155af0` | [2],[3] | GeneralKeyAssignment GetTotalDataPages |
-| **22** | 05 | 0x0e → `140155c30` | [2],[3] | GeneralKeyAssignment SettingsInformation request |
-| **22** | 06 | 0x0f → `140155cd0` | [2],[3],[4] | Reset key assignment |
-| **22** | 07 | 0x10 → `140155d80` | [2..3]=u16, [4]=u8 | key-assignment related |
-| 24 | 01/02 | 0x11/0x12 | paged | (not in this mouse's descriptor) |
-| 26 | 01/02 | 0x13–0x16 | | (not in this mouse's descriptor) |
-| **32** | 01 (capture; static map said 02) | 0x17 → `1400c9120` | see §5.5 | **DPI table** (stages, DPI, colours, current stage). Confirmed by capture |
-| **32** | 03 | 0x18 → `1400c4970` | u32 arg | Lighting: brightness info request |
-| **36** | 06 / 01 / 02 / 03 | 0x19–0x1c | | Lighting effect control (preset / direct / frame data) |
-| **40** | 04 / 05 | 0x1d / 0x1e | | macro / key data |
-| **42** | 01 / 02 | 0x1f / 0x20 | | macro |
-| **44** | 01 / 02 | 0x21 / 0x22 | | macro / SOCD |
-| 46 | 01..04 | 0x24–0x27 | | (not in descriptor) |
-| **50** | 02 | 0x28 → `14016e810` | args | WirelessRFBatteryConfiguration (low-battery threshold, save) |
-| **50** | 03 | 0x29 → `14017a300` | none | Get WirelessRFBatteryInformation |
-| **52** | 01 | 0x2a → `14017a000` | none | Get WirelessRFConnectionStatus |
-| 54 | 02 / 05 | 0x2b / 0x2c | (u32 profile, u32 time) / (u32) | Sleep-time config / info (0x54 not in descriptor) |
-| **60** | 04 / 01 | 0x49 / 0x4a | | |
-| **62** | 02 / 01 | 0x4b / 0x4c | | |
-| 66 | 01 / 02 | 0x4d / 0x4e | | |
-| 70 | 02/04/07 | 0x4f–0x51 | | three-in-one dongle (not in descriptor) |
-| 80 | ff | 0x54 | | |
+The Haste 2 report descriptor only declares report IDs `10 12 14 20 22 30 32 36 40 42 44 50 52 60 62 F0 FA FC`. **Bold** rows are the mouse-relevant ones.
+`60`/`62` are declared, but in the hub they are audio commands; `30`/`F0`/`FA`/`FC` are not in the hub's tables (probably firmware update).
 
-Dispatcher cases 0x2d–0x48 are audio requests. In this protocol they only log "Universal Audio Coming Soon".
+| cmd sub | case | Request (FlatBuffers type) | Payload (byte offsets) |
+|---|---|---|---|
+| **10 01** ✔ | 00 | DeviceInformation | – (reply `11 01`, §5.3) |
+| **10 02** | 01 | DeviceSerialNumberRequest | – |
+| **12 01** | 02 | DeviceFactoryReset | [2] u8. **Never send** |
+| **14 01** | 03 | CurrentProfileSetup | [2..3] reset_profile u16, [4] reset_profile_state, [5] switching_profile |
+| **14 02** ✔ | 04 | CurrentProfileInformationRequest | – |
+| **20 01** | 05 | GeneralKeyDefinitionSetup (header only) | [2..3] profile, [4] pages = ceil(n/15), [5] u8, [6] n |
+| **20 01 + 20 02** | 06 | GeneralKeyAssignmentEvent | header as above, then pages `20 02 <page> 00` + 15 × 4-byte entries (§4) |
+| **20 03** | 07 | GeneralKeyAssignmentGetTotalDataPagesRequest | [2] profile, [3] layer |
+| **20 04** | 08 | GeneralKeyAssignmentSettingsInformationRequest | one packet per page: [2] profile, [3] page index |
+| **20 05** ✔ | 09 | ResetGeneralKeyAssignmentSettings | [2..3] profile, [4] reset_mcu (sent at startup with 0 and on Save with `01 00 01`) |
+| **22 01** | 0a | MacroSetup | paged, see `build_key_assignment` |
+| **22 02** | 0b | MacroGroupConfiguration | |
+| **22 03** | 0c | MacroActionDataEventConfiguration | |
+| **22 04** | 0d | MacroGetTotalGroupRequest | [2] profile, [3] switch_layer |
+| **22 05** | 0e | MacroGetGroupInformationRequest | [2] profile, [3] group_id |
+| **22 06** | 0f | MacroActionDataInformationRequest | [2] profile, [3] group_id, [4] data_pages_sequence_number |
+| **22 07** ✔ | 10 | ResetMacroKeyAssignmentSettings | [2..3] profile, [4] reset_mcu |
+| 24 02/03, 24 06 | 11, 12 | KeyPressAndReleaseSetup / ResetKeyPressAndRelease | |
+| 26 01/03/04/05 | 13–16 | SOCDSetup / GetTotalDataPages / SettingsInformation / ResetSOCD | |
+| **32 01** ✔ | 17 | DPISettings | §5.5 |
+| **32 02** | 18 | DPISettings information request | [2] profile |
+| **36 01** ✔ | 19 | SensorAdditionalCustomization | [2..3] profile, [4] angle_snap, [5] angle_tune, [6] angle_tune_enable, [7] lift_distance, [8] motion_sync |
+| **36 02** | 1a | SensorAdditionalCustomization information request | [2] profile |
+| **36 03** | 1b | MouseSensorLiftCalibrationRequest | [2..3] profile, [4] state, [5] lift_calibration_parameter |
+| **36 04** | 1c | MouseSensorLiftCalibrationStatusRequest | [2] profile |
+| **40 01** ✔ | 1d | LightingEffectControlLEDBrightnessConfiguration | [2..3] profile, [4] brightness 0–255 |
+| **40 02** | 1e | LightingEffectControlLEDBrightnessInformationRequest | [2] profile |
+| **42 02** ✔ | 1f | LightingEffectControlPresetModeSetup | §3.1 |
+| **42 03** | 20 | LightingEffectControlPresetModeInformationRequest | [2] profile |
+| **44 01** | 21 | LightingEffectControlDirectModePerKeyLightConfiguration | [2] total_pages |
+| **44 02** ✔ | 22 | LightingEffectControlDirectModePerKeyLightData | [2..3] page/seq, [4..] RGB per LED (one LED: `44 02 00 00 R G B`) |
+| **44 03 / 44 04** ✔ | 23 | LightingEffectControlDirectModeFrameLightData | §3.2 |
+| 46 03..06 | 24–27 | Ambient light config/status, light-enable config/status | |
+| **50 01** ✔ | 28 | WirelessRFBatteryConfiguration | [2] low_battery_warning_threshold (%, NGENUITY slider 5–25, default 10), [3] save_threshold_to_device. Not reported back: byte [10] of `51 02` stays 0 |
+| **50 02** ✔ | 29 | WirelessRFBatteryInformation | – (reply `51 02`, §5.4) |
+| **52 01** ✔ | 2a | WirelessRFConnectionStatus | – (reply `53 01 <connected>`) |
+| 54 01 / 54 02 | 2b, 2c | WirelessRFDeviceSleepTimeConfiguration (u32 profile, u32 time) / information request | not declared by this mouse |
+| – | 2d–48 | audio (input/output level, mute, EQ, monitoring, chat-mix, …) | log "Universal Audio Coming Soon" |
+| 60 01 / 60 02 | 49, 4a | GenericAudioSettingsConfiguration / InformationRequest | audio |
+| 62 01 / 62 02 | 4b, 4c | AdvancedAudioPromptSoundSwitching / InformationRequest | audio |
+| 66 01 / 66 02 | 4d, 4e | OnboardEQConfiguration / InformationRequest | audio |
+| 70 02 / 04 / 07 | 4f–51 | ThreeInOneDongle mode status / enter pairing / clear pairing | other dongle type |
+| 80 ff | 54 | InputNotificationEnableConfiguration (probably) | |
+| – | 52, 53, 55–5c | gamepad (info, trigger dead-zone, thumbstick, vibration) | no packet in this protocol |
 
-## 4. DPI settings encoding (request side)
-
-Header `20 01`:
+### 3.1 `42 02` LightingEffectControlPresetModeSetup
 ```
-[0]=0x20 [1]=0x01 [2..3]=profile (u16 LE) [4]=ceil(n/15) [5]=u8 (current_dpi_index or polling rate, TBD) [6]=n
+[2..3]   profile u16
+[4]      layer-1 mode      0 TurnOff, 1 Solid, 2 Breath, 3 Wave, 4 ColorCycle, 5 Confetti,
+                           6 FrameLight, 7 VUMeter, 8 MirrorWave, 9 Alternating
+[5..6]   layer-1 duration u16 (speed / frame time)
+[7]      layer-1 direction 0 Unknown, 1 Left, 2 Right, 3 Up, 4 Down, 5 CenterOut, 6 CenterIn
+[8]      layer-1 colour type 0 Unknown, 1/2/3 = one/two/three colours, FE Spectrum, FF Random
+[9..17]  layer-1 colours, 3 × RGB
+[18]     layer-2 trigger mode 0 TurnOff, 80 Fade, 81 Explosion, 82 HyperXFlame
+[19..20] layer-2 duration, [21] direction, [22] colour type, [23..31] 3 × RGB
 ```
-Data pages `20 02` (one per 15 entries):
-```
-[0]=0x20 [1]=0x02 [2]=page index [3]=0x00 [4..] = entries of 4 bytes: [kind][a][b][c]
-```
-Entry kinds produced by the encoder (`FUN_140154890`):
+The Save in capture 2 sent `42 02 01 00 06 32 00`: profile 1, FrameLight, duration 50.
 
-| kind | bytes a,b,c | notes |
-|---|---|---|
-| 1 | idx, v1, v2 | |
-| 2 | idx, v, 0 | probably enable flag |
-| 3 | idx, lo, hi | **u16 resolution** (DPI, 200–26000 step 50 for Haste 2) |
-| 4 | idx, v, 0 | |
-| 5 | idx, v1, v2 | |
-| 6 | idx, v, 0 | |
+### 3.2 FrameLight upload (`DirectModeFrameLightData`, case `0x23`)
+```
+44 03 <frames u8> <total packets u16> <profile u16> <u8>     header
+44 04 <packet index u16> <colour data>                     × total packets (one RGB per LED)
+42 02 <profile u16> 06 <duration u16> 00 …                 switch the profile to FrameLight
+```
+Capture 2: `44 03 50 50 00 01 00` = 80 frames, 80 packets, profile 1. Then `44 04 0000 ff0000` … `44 04 004f …`, then `42 02 01 00 06 32 00`.
 
-Value ranges from the .NET side:
-* DPI: 200–26000, step 50 (`PulsefireHaste2DPIResolutionSettings`)
-* Polling rate enum (`UniversalPollingRate`): 125 Hz=`0x40`, 250=`0x20`, 500=`0x10`, 1000=`0x08` (2K=`0x04`, 4K=`0x02`, 8K=`0x01` not supported on this mouse)
-* Lift distance: 1 mm=`0`, 2 mm=`2`; angle tune: 0, +15, +30, −30 (`0xE2`), −10 (`0xF6`)
-* Charge status: 0 none, 1 charging, 2 full, 3 error, `0xFF` unknown
-* Haste 2 Wireless UI: 1 LED zone (`CustomLed1`); buttons Left/Right/Middle/Forward/Back/DPI;
-  software RGB effects only (no hardware effects); motion sync not supported.
+## 4. Button remapping (`20 xx`, GeneralKeyAssignment)
+
+Encoder `FUN_140154890` (case 06), confirmed by `ngenuity7.pcapng`.
+
+**Sequence NGENUITY sends for every remap** (live, profile 0):
+```
+20 05 00 00 00                      ResetGeneralKeyAssignmentSettings: profile 0, reset_mcu 0 (back to defaults)
+20 01 00 00 <pages> 01 <n>          header: [2..3] profile, [4] pages = ceil(n/15), [5] layer (1 = Base), [6] n entries
+20 02 <page> 00 <entries…>          one per page, up to 15 × 4-byte entries; the mouse replies 21 02
+22 07 00 00 00                      ResetMacroKeyAssignmentSettings: profile 0, reset_mcu 0
+```
+Only buttons that differ from the default are sent; the reset first restores the defaults.
+
+**Entry `[type][button][a][b]`.** `button` is the physical button's `MouseKeyCode`:
+1 Left, 2 Right, 4 Middle, 8 Back, 0x10 Forward, 0x20 DPI.
+
+| type | Action | a | b |
+|---|---|---|---|
+| 01 | Mouse button | MouseKeyCode (1 Left, 2 Right, 4 Middle, 8 Back, 10 Forward, 20 DPI) | MouseKeyAction (1 SingleClick, 2 DoubleClick, 3 Wheel, 8 SinglePress, 9 DoublePress, 10 TriplePress, 11 LongPress) |
+| 02 | Keyboard key | HID usage ID (`KeyboardKeyCode`: A = 4 … Z = 29, 1 = 30 …, Enter 40, ESC 41, …) | 00 |
+| 03 | Consumer / media | ConsumerKeyCode u16 LE: MediaNext 181, MediaPrev 182, MediaStop 183, MediaPlay 205, VolumeMute 226, VolumeUp 233, VolumeDown 234, Calculator 402, WebBack 548, WebForward 549, … ||
+| 04 | Extra function | ExtraKeyCode: 0 Disable, 1 DpiAdd, 2 DpiSub, 3 DpiCycleUp, 4 DpiCycleDown, 5 DpiClutch, 6 ForwardSwitchApps, 7 BackwardSwitchApps | 00 |
+| 05 | MediaDAC | code | trigger (0 SinglePress, 1 DoublePress, 2 TriplePress, 3 LongPress) |
+| 06 | GamePad | code | 00 |
+
+**Captured** (Forward side button → Back, then back to Forward, twice):
+```
+20 02 00 00 01 10 08 01     Mouse, button Forward (10) → BackButton (08), SingleClick
+20 02 00 00 01 10 10 01     Mouse, button Forward (10) → ForwardButton (10) = default
+```
+
+Read-back: `20 03 <profile> <layer>` = total pages, then `20 04 <profile> <page>` per page.
+With the Forward button back on its default (2026-10-13), `20 03 00 01` → `21 03 00` (0 pages) and `20 04 00 00` → `21 04` (empty).
+So with no remap active, the mouse reports nothing. The reply layout with an active remap is still unconfirmed.
+`22 04 00 01` (macro total groups) → `23 04 01`; its meaning is unknown.
+
+**Confirmed from Linux (2026-10-14):** remapped Back → Forward live (`20 05 00 00 00`, `20 01 00 00 01 01 01`, `20 02 00 00 01 08 10 01`, `22 07 00 00 00`).
+The user confirmed in a browser that the back button went forward.
+Read-back: `20 03 00 01` → `21 03 01 01` (1 page, 1 entry); `20 04 00 00` → `21 04 01 00 01 08 10 01` (entries from [4], same 4-byte format).
+Restored with entry `01 08 08 01`; afterwards both reads came back empty, so the mouse does not store default assignments.
+
+**Saving (NGENUITY `ApplyAndSaveKeyAssignment`):** the same sequence with profile `1` and `reset_mcu = 1`, i.e. `20 05 01 00 01`, then `20 01 01 00 …` / `20 02 …`.
 
 ## 5. Confirmed on the device (2026-10-12, `/dev/hidraw4`, NGENUITY/Wine stopped)
 
@@ -258,6 +310,63 @@ Nothing is written to flash.
 **`44 03` / `44 04`: stored effect for onboard use** (sent only on Save, §5.5): header `44 03 50 50 00 01`, then 80 frames `44 04 <frame u16 LE> R G B`.
 This is presumably what the mouse plays on its own when NGENUITY is not running. The header bytes still need decoding:
 0x50 = 80 frames; the second 0x50 is speed?; `00 01` = slot 1?
+
+### 5.8 Reading settings back (confirmed from Linux 2026-10-13, mouse awake)
+
+These queries were found by the binary extraction (§3). The mouse answers each one with `cmd+1, sub`.
+
+| Request | Reply | Layout |
+|---|---|---|
+| `32 02 <profile>` | `33 02 08 1f 02 07 00 ff 00 00 0f 00 00 00 ff 1f 00 ff ff 00 3f 00 00 ff 00 7f 00 ff ff ff` | the `32 01` payload without the profile: [2] polling-rate code, [3] enabled-stage mask, [4] active stage, [5+5i..] stage i = u16 DPI code + RGB |
+| `36 02 <profile>` | `37 02 00 …` | [2] angle_snap, [3] angle_tune, [4] angle_tune_enable, **[5] lift-off** (00 = 1 mm, 02 = 2 mm; confirmed: `37 02 00 00 00 02` after `36 01 … 02`), [6] motion_sync. Same layout as the `36 01` payload without the profile |
+| `40 02 <profile>` | `41 02 ff` | [2] brightness 0–255 |
+| `42 03 <profile>` | `43 03 06 32 00` | [2] layer-1 mode (6 = FrameLight), [3..4] duration (50) |
+
+Profile 0 and profile 1 returned identical data. While the mouse sleeps, only the dongle ACK comes back.
+
+### 5.9 Software lighting effects (light engine `hxn-srv-light-engine.exe`)
+
+`PulsefireHaste2WirelessConfiguration` lists only **software** effects: Alternating, Breathing, Confetti, Solid, SpectrumWave, Sunrise and Wave.
+`GetSupportHWEffects` throws NotImplemented, so the firmware's built-in preset modes (Breath, Wave, ColorCycle, …) are not used for this mouse.
+NGENUITY sends the effect description to the Rust light engine, which renders colours in real time. They are streamed live as `44 02`, and on Save one cycle is uploaded as FrameLight (§3.2).
+
+Speed: `period_ms = max − speed% × (max − min)`.
+- Breathing 800–4800 ms
+- Alternating 1200–4800 ms
+- Confetti 100–1200 ms
+- SpectrumWave 200–2000 ms
+- Sunrise 400–2400 ms
+- Wave 500–4500 ms
+
+Default speed 50 %. The FrameLight `42 02` speed field carries the speed % itself (`0x32` = 50).
+
+Per-LED render formulas (progress `t` = elapsed / period, 0 → 1; channels clamped to 0–255 and truncated):
+
+| Effect | Function | Formula for one LED at (0,0) |
+|---|---|---|
+| Breathing | `0x14002df60` | colour × sin(π·t) |
+| Alternating | `0x14002a9c0` | toggles colour every 0.2 period (5 toggles per period); gradient mode blends linearly inside each 0.2 slot |
+| Confetti | `0x140025f00` | each period: previous ← current, new ← random RGB (3 random bytes); blends between them |
+| SpectrumWave | `0x14002be20` | colour list index advances every period; blends colour[i] → colour[i+1] by t |
+| Wave | `0x14002ae60` | gradient(fmod(−t + 1, 1)) over (offset, colour) stops, wrapping last → first |
+| Sunrise | `0x14002a2a0` | per LED a random one of 3 built-in gradients (table built in `0x140029b70`) plus closing stop 1.0 → first colour |
+| Twilight | `0x14002d150` | random twinkling particles (not offered for this mouse) |
+
+Sunrise gradients:
+- A: 0 `FFB200`, 0.5 `FF6100`
+- B: 0 `FFB200`, 0.25 `FF6100`, 0.5 `FF1400`, 0.75 `FFB700`
+- C: 0 `FF8200`, 0.2 `FF9900`, 0.4 `FFA100`, 0.6 `FFA800`, 0.8 `FF6100`
+
+**The stored colour cycle in capture 2** is SpectrumWave through `FF0000, CCFF00, 00FF66, 0066FF, CC00FF`, sampled as 80 frames at t = i/79 (first frame = last frame).
+Re-rendering it with the formula above reproduces every frame within ±2 per channel.
+
+**Confirmed from Linux (2026-10-14):** FrameLight upload to the **live slot 0** works.
+`pulsefire lighting solid purple` sends 80 × `44 04 <i> 80 00 FF` plus the header and `42 02 00 00 06 32 00`, and the LED turned solid purple.
+**Wait for the mouse's `45 04 <i>` reply after every frame**, and for `43 02` after `42 02`. On the first try only the dongle ACK was awaited.
+80 frames were sent in about 1 s, the mouse dropped most of them over RF, and only a few frames of the playing table changed (a short purple flash in every cycle).
+
+**Saving confirmed (2026-10-14):** `pulsefire lighting solid purple --save` (the same upload to slot 1) survived a power cycle; the user confirmed the LED came back solid purple.
+`pulsefire lighting rainbow --save` then restored the original stored cycle (byte-identical to NGENUITY's Save).
 
 ## 6. Open items
 1. ~~Battery query~~. Done: it is `50 02` (§5.4). My static sub mapping for cmd 0x50 was off by one, so the other static sub numbers in §3 also need checking against captures.

@@ -1,18 +1,28 @@
 import enum
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 
+from pulsefire.buttons import ENTRIES_PER_PAGE, ENTRY_SIZE, Assignment
 from pulsefire.colors import Rgb
 
 REPORT_SIZE = 64
 LIVE_SLOT = 0
+SAVED_SLOT = 1
+BASE_LAYER = 1
+KEY_PAGE_HEADER = 4
 
 DPI_MIN = 100
 DPI_MAX = 26000
 DPI_STEP = 50
 MAX_STAGES = 5
+MAX_STAGE_SLOTS = 11
+STAGE_SIZE = 5
 BRIGHTNESS_MAX = 100
+BRIGHTNESS_RAW_MAX = 0xFF
 MIN_EVENT_LENGTH = 3
+MAX_FRAMES = 255
+BATTERY_ALERT_MIN = 5
+BATTERY_ALERT_MAX = 25
 
 ACK_REPORT = 0xFF
 ACK_SUB = 0x01
@@ -27,10 +37,23 @@ EVENT_LINK = 0x0A
 
 class Command(enum.Enum):
     DEVICE_INFO = (0x10, 0x01)
+    KEY_HEADER = (0x20, 0x01)
+    KEY_PAGE = (0x20, 0x02)
+    KEY_PAGES_READ = (0x20, 0x03)
+    KEY_PAGE_READ = (0x20, 0x04)
+    KEY_RESET = (0x20, 0x05)
     DPI_TABLE = (0x32, 0x01)
+    DPI_TABLE_READ = (0x32, 0x02)
     SENSOR = (0x36, 0x01)
+    SENSOR_READ = (0x36, 0x02)
     BRIGHTNESS = (0x40, 0x01)
+    BRIGHTNESS_READ = (0x40, 0x02)
+    LIGHTING_PRESET = (0x42, 0x02)
+    LIGHTING_READ = (0x42, 0x03)
+    FRAME_HEADER = (0x44, 0x03)
+    FRAME_DATA = (0x44, 0x04)
     LIVE_COLOR = (0x44, 0x02)
+    BATTERY_ALERT = (0x50, 0x01)
     BATTERY = (0x50, 0x02)
     CONNECTION = (0x52, 0x01)
 
@@ -60,6 +83,14 @@ class PollingRate(enum.IntEnum):
     def code(self) -> int:
         return _POLLING_CODES[self]
 
+    @classmethod
+    def from_code(cls, code: int) -> "PollingRate":
+        for rate, value in _POLLING_CODES.items():
+            if value == code:
+                return rate
+        msg = f"unknown polling-rate code {code:#04x}"
+        raise ValueError(msg)
+
 
 _POLLING_CODES: dict[PollingRate, int] = {
     PollingRate.HZ_125: 0x40,
@@ -76,6 +107,19 @@ class LiftOff(enum.Enum):
     @property
     def label(self) -> str:
         return "low (1 mm)" if self is LiftOff.LOW else "high (2 mm)"
+
+
+class LightingMode(enum.IntEnum):
+    OFF = 0
+    SOLID = 1
+    BREATH = 2
+    WAVE = 3
+    COLOR_CYCLE = 4
+    CONFETTI = 5
+    FRAME_LIGHT = 6
+    VU_METER = 7
+    MIRROR_WAVE = 8
+    ALTERNATING = 9
 
 
 class ChargeStatus(enum.IntEnum):
@@ -101,6 +145,41 @@ class ChargeStatus(enum.IntEnum):
 class DpiStage:
     dpi: int
     color: Rgb
+
+
+@dataclass(frozen=True)
+class DpiTable:
+    polling_rate: PollingRate
+    active_stage: int
+    stages: tuple[DpiStage, ...]
+
+    def replace_stage(self, index: int, stage: DpiStage) -> "DpiTable":
+        stages = list(self.stages)
+        stages[index] = stage
+        return replace(self, stages=tuple(stages))
+
+
+@dataclass(frozen=True)
+class SensorSettings:
+    angle_snap: int
+    angle_tune: int
+    angle_tune_enable: int
+    lift_off: LiftOff
+    motion_sync: int
+
+
+@dataclass(frozen=True)
+class LightingEffect:
+    mode: int
+    duration: int
+
+    @property
+    def label(self) -> str:
+        try:
+            name = LightingMode(self.mode).name.replace("_", " ").title()
+        except ValueError:
+            name = f"unknown mode {self.mode:#04x}"
+        return f"{name} (speed {self.duration})"
 
 
 @dataclass(frozen=True)
@@ -157,35 +236,70 @@ def validate_dpi(dpi: int) -> None:
         raise ValueError(msg)
 
 
-def encode_dpi_table(
-    stages: Sequence[DpiStage],
-    active_stage: int,
-    polling_rate: PollingRate,
-    slot: int = LIVE_SLOT,
-) -> bytes:
-    if not 1 <= len(stages) <= MAX_STAGES:
+def profile_query(command: Command, slot: int = LIVE_SLOT) -> bytes:
+    return command.packet(bytes([slot]))
+
+
+def encode_dpi_table(table: DpiTable, slot: int = LIVE_SLOT) -> bytes:
+    if not 1 <= len(table.stages) <= MAX_STAGES:
         msg = f"between 1 and {MAX_STAGES} DPI stages are supported"
         raise ValueError(msg)
-    if not 0 <= active_stage < len(stages):
-        msg = f"active stage {active_stage + 1} does not exist"
+    if not 0 <= table.active_stage < len(table.stages):
+        msg = f"active stage {table.active_stage + 1} does not exist"
         raise ValueError(msg)
-    enabled_mask = (1 << len(stages)) - 1
+    enabled_mask = (1 << len(table.stages)) - 1
     payload = bytearray(slot.to_bytes(2, "little"))
-    payload += bytes([polling_rate.code, enabled_mask, active_stage])
-    for stage in stages:
+    payload += bytes([table.polling_rate.code, enabled_mask, table.active_stage])
+    for stage in table.stages:
         validate_dpi(stage.dpi)
         payload += dpi_to_code(stage.dpi).to_bytes(2, "little")
         payload += stage.color.to_bytes()
     return Command.DPI_TABLE.packet(bytes(payload))
 
 
-def encode_sensor(lift_off: LiftOff, slot: int = LIVE_SLOT) -> bytes:
-    payload = slot.to_bytes(2, "little") + bytes([0x00, 0x00, 0x00, lift_off.value, 0x00])
+def parse_dpi_table(report: bytes) -> DpiTable:
+    mask = report[3]
+    raw_active = report[4]
+    enabled = [index for index in range(MAX_STAGE_SLOTS) if mask >> index & 1]
+    stages: list[DpiStage] = []
+    for index in enabled:
+        offset = 5 + index * STAGE_SIZE
+        code = int.from_bytes(report[offset : offset + 2], "little")
+        color = Rgb(report[offset + 2], report[offset + 3], report[offset + 4])
+        stages.append(DpiStage(code_to_dpi(code), color))
+    active = enabled.index(raw_active) if raw_active in enabled else 0
+    return DpiTable(PollingRate.from_code(report[2]), active, tuple(stages))
+
+
+def encode_sensor(settings: SensorSettings, slot: int = LIVE_SLOT) -> bytes:
+    payload = slot.to_bytes(2, "little") + bytes(
+        [
+            settings.angle_snap,
+            settings.angle_tune,
+            settings.angle_tune_enable,
+            settings.lift_off.value,
+            settings.motion_sync,
+        ]
+    )
     return Command.SENSOR.packet(payload)
 
 
+def parse_sensor(report: bytes) -> SensorSettings:
+    return SensorSettings(
+        angle_snap=report[2],
+        angle_tune=report[3],
+        angle_tune_enable=report[4],
+        lift_off=LiftOff(report[5]),
+        motion_sync=report[6],
+    )
+
+
 def percent_to_brightness(percent: int) -> int:
-    return percent * 0xFF // BRIGHTNESS_MAX
+    return percent * BRIGHTNESS_RAW_MAX // BRIGHTNESS_MAX
+
+
+def brightness_to_percent(raw: int) -> int:
+    return round(raw * BRIGHTNESS_MAX / BRIGHTNESS_RAW_MAX)
 
 
 def encode_brightness(percent: int, slot: int = LIVE_SLOT) -> bytes:
@@ -194,6 +308,79 @@ def encode_brightness(percent: int, slot: int = LIVE_SLOT) -> bytes:
         raise ValueError(msg)
     payload = slot.to_bytes(2, "little") + bytes([percent_to_brightness(percent)])
     return Command.BRIGHTNESS.packet(payload)
+
+
+def parse_brightness(report: bytes) -> int:
+    return report[2]
+
+
+def parse_lighting(report: bytes) -> LightingEffect:
+    return LightingEffect(mode=report[2], duration=int.from_bytes(report[3:5], "little"))
+
+
+def encode_key_reset(slot: int, *, reset_mcu: bool) -> bytes:
+    return Command.KEY_RESET.packet(slot.to_bytes(2, "little") + bytes([int(reset_mcu)]))
+
+
+def encode_key_assignments(assignments: list[Assignment], slot: int) -> list[bytes]:
+    pages = [
+        assignments[start : start + ENTRIES_PER_PAGE]
+        for start in range(0, len(assignments), ENTRIES_PER_PAGE)
+    ]
+    header = slot.to_bytes(2, "little") + bytes([len(pages), BASE_LAYER, len(assignments)])
+    packets = [Command.KEY_HEADER.packet(header)]
+    for index, page in enumerate(pages):
+        entries = b"".join(assignment.to_bytes() for assignment in page)
+        packets.append(Command.KEY_PAGE.packet(bytes([index, 0]) + entries))
+    return packets
+
+
+def encode_key_pages_query(slot: int) -> bytes:
+    return Command.KEY_PAGES_READ.packet(bytes([slot, BASE_LAYER]))
+
+
+def encode_key_page_query(slot: int, page: int) -> bytes:
+    return Command.KEY_PAGE_READ.packet(bytes([slot, page]))
+
+
+def parse_key_page_count(report: bytes) -> int:
+    return report[2]
+
+
+def parse_key_page(report: bytes) -> list[Assignment]:
+    assignments: list[Assignment] = []
+    for index in range(ENTRIES_PER_PAGE):
+        offset = KEY_PAGE_HEADER + index * ENTRY_SIZE
+        entry = report[offset : offset + ENTRY_SIZE]
+        if len(entry) < ENTRY_SIZE or entry[0] == 0:
+            break
+        assignments.append(Assignment.from_bytes(entry))
+    return assignments
+
+
+def encode_frame_light(colors: list[Rgb], speed: int, slot: int) -> list[bytes]:
+    if not 1 <= len(colors) <= MAX_FRAMES:
+        msg = f"between 1 and {MAX_FRAMES} frames are supported"
+        raise ValueError(msg)
+    count = len(colors)
+    header = bytes([count]) + count.to_bytes(2, "little") + slot.to_bytes(2, "little")
+    packets = [Command.FRAME_HEADER.packet(header)]
+    packets += [
+        Command.FRAME_DATA.packet(index.to_bytes(2, "little") + color.to_bytes())
+        for index, color in enumerate(colors)
+    ]
+    mode = slot.to_bytes(2, "little") + bytes([LightingMode.FRAME_LIGHT])
+    packets.append(Command.LIGHTING_PRESET.packet(mode + speed.to_bytes(2, "little")))
+    return packets
+
+
+def encode_battery_alert(threshold: int, *, save: bool) -> bytes:
+    if not BATTERY_ALERT_MIN <= threshold <= BATTERY_ALERT_MAX:
+        msg = (
+            f"low-battery alert must be {BATTERY_ALERT_MIN}-{BATTERY_ALERT_MAX} %, got {threshold}"
+        )
+        raise ValueError(msg)
+    return Command.BATTERY_ALERT.packet(bytes([threshold, int(save)]))
 
 
 def encode_live_color(color: Rgb) -> bytes:
