@@ -180,5 +180,5 @@ without root. Change one setting at a time and note the time of each change.
 | `probe_readonly.py` | The read-only probe script used for the first tests |
 | `70-hyperx-pulsefire-haste2.rules` | udev rule that gives the logged-in user access to the Haste 2 Wireless dongle |
 | `50-usbmon-wireshark.rules` | udev rule that lets the `wireshark` group capture USB traffic |
-| `captures/` | USB captures of NGENUITY (`ngenuityN.pcapng`) |
+| `captures/` | USB captures of NGENUITY, filtered to the device: `<device>_<number>_<what it records>.pcapng` |
 | `extracted/`, `decompiled/`, `ghidra_targets/`, `hyperx.*` | Extracted NGENUITY files, decompiled sources and the Ghidra project (not in version control) |

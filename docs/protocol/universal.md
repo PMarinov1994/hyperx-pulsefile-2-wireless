@@ -149,7 +149,7 @@ arriving (NGENUITY sends about 15 per second), then returns to its stored effect
 
 ## 4. Button remapping (`20 xx`, GeneralKeyAssignment)
 
-Encoder `FUN_140154890` (case 06), confirmed by `ngenuity7.pcapng`.
+Encoder `FUN_140154890` (case 06), confirmed by `pulsefire-haste-2-wireless_07_button-remap-forward-back.pcapng`.
 
 **Sequence NGENUITY sends for every remap** (live, profile 0):
 ```

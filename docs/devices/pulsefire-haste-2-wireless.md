@@ -56,6 +56,19 @@ off  bytes                               value / guess
 
 ## Capture and test log
 
+USB captures of NGENUITY 3.1.0 in a VirtualBox VM, recorded on the Linux host with `usbmon` and
+filtered to the dongle's traffic (`captures/`):
+
+| File | What NGENUITY did |
+|---|---|
+| `pulsefire-haste-2-wireless_01_startup-battery-sleep-wake.pcapng` | start-up, battery reading, mouse going to sleep and waking up; no settings changed |
+| `pulsefire-haste-2-wireless_02_dpi-stage-add-save-dpi-button.pcapng` | new 6400 DPI stage, Save to the mouse, DPI-button presses |
+| `pulsefire-haste-2-wireless_03_polling-rate-1000-250-1000-first-try.pcapng` | two start-ups, polling rate 1000 → 250 → 1000 |
+| `pulsefire-haste-2-wireless_04_polling-rate-1000-250-1000.pcapng` | polling rate 1000 → 250 → 1000 |
+| `pulsefire-haste-2-wireless_05_lift-off-low-high.pcapng` | lift-off Low ↔ High, no Save |
+| `pulsefire-haste-2-wireless_06_brightness-low-high.pcapng` | brightness low → high, no Save |
+| `pulsefire-haste-2-wireless_07_button-remap-forward-back.pcapng` | Forward button → Back → Forward, twice, no Save |
+
 ### First Linux probe (2026-10-12)
 
 | Request | Reply |
@@ -67,7 +80,7 @@ off  bytes                               value / guess
 | `50 03` | ACK from B with status 01, no data. **Not the battery query**: NGENUITY uses `50 02` (see the first NGENUITY capture below) |
 | `52 01` RFConnectionStatus | `53 01 01` → **connected = 1**, followed by an unsolicited `fb 07` report |
 
-### NGENUITY capture (`captures/ngenuity1.pcapng`, VM via VirtualBox, no settings changed)
+### NGENUITY capture (`captures/pulsefire-haste-2-wireless_01_startup-battery-sleep-wake.pcapng`, VM via VirtualBox, no settings changed)
 
 Commands NGENUITY sends at startup and after every reconnect, in this order:
 `10 01`, `14 02` (startup only), `52 01`, `50 02` ×3, `40 01 00 00 82`, `36 01`, `32 01 …`, `20 05`, `22 07`.
@@ -95,7 +108,7 @@ On every `fb 0a 01`, NGENUITY re-runs the startup sequence above.
 
 **Queued commands:** a command sent while the mouse sleeps is delivered after wake-up. The mouse ACK for the `32 01` sent at 94.0 s arrived at 143.45 s, right after the wake event.
 
-### DPI table and save sequence (`captures/ngenuity2.pcapng`: new 6400 DPI stage, save, DPI-button presses)
+### DPI table and save sequence (`captures/pulsefire-haste-2-wireless_02_dpi-stage-add-save-dpi-button.pcapng`: new 6400 DPI stage, save, DPI-button presses)
 
 **`32 01`: full DPI table** (built by `FUN_1400c9120`, confirmed by capture):
 ```
@@ -131,7 +144,7 @@ After the save, NGENUITY re-sends the slot-0 set (`40 01 00 00 ff`, `36 01`, `32
 The startup `20 05` / `22 07` without arguments are probably "apply slot 0" or a sync; still unknown.
 
 
-### Sensor settings `36 01` (`captures/ngenuity5.pcapng`, lift-off Low/High, no Save)
+### Sensor settings `36 01` (`captures/pulsefire-haste-2-wireless_05_lift-off-low-high.pcapng`, lift-off Low/High, no Save)
 
 ```
 [0]=36 [1]=01
@@ -146,7 +159,7 @@ Only [7] has been seen to change (`36 01 00 00 00 00 00 02` = High, `36 01` with
 Every change in the UI makes NGENUITY re-send the whole slot-0 set `40 01, 36 01, 32 01, 20 05, 22 07`.
 Changing the polling rate sent only `32 01` with the new [4]. Both changes are live and need no Save.
 
-### Lighting (`captures/ngenuity6.pcapng`, brightness low → high, no Save)
+### Lighting (`captures/pulsefire-haste-2-wireless_06_brightness-low-high.pcapng`, brightness low → high, no Save)
 
 **`40 01`: LED brightness**: `40 01 <slot u16 LE> <brightness>`. The value is NGENUITY's slider value passed straight through as a byte
 (`LightsSWControlViewModel.OnGlobalBrightnessChanged` → `SetBrightness(BaseId, (byte)value)`).
