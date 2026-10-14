@@ -245,7 +245,6 @@ wheels = [
 
 [[package]]
 name = "ngenuity-linux-cli"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

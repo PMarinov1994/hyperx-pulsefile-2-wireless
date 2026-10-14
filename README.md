@@ -161,14 +161,18 @@ without root. Change one setting at a time and note the time of each change.
 Releases are published to [PyPI](https://pypi.org/project/ngenuity-linux-cli/) by the GitHub workflow
 `.github/workflows/release.yml`, using PyPI's trusted publishing (no API token is stored anywhere).
 
-1. Set the new version in `pyproject.toml` (e.g. `uv version 0.2.0`) and commit it.
-2. Tag the commit with the same version and push the tag:
+The package version comes from git tags (hatch-vcs): a commit tagged `v0.2.0` builds version
+`0.2.0`, and any other commit builds a development version such as `0.2.1.dev3+g1a2b3c4`, which PyPI
+does not accept. Only tags of the form `vX.Y.Z` count; other tags are ignored.
+
+1. Commit and push the changes for the release.
+2. Tag the commit and push the tag:
    ```
    git tag v0.2.0
    git push origin v0.2.0
    ```
-3. The workflow checks that the tag matches the version, runs ruff and mypy, builds the package and
-   publishes it. If a reviewer is required for the `pypi` environment, approve the run in the
+3. The workflow runs ruff and mypy, builds the package with uv, checks that the built version
+   matches the tag and publishes it. If a reviewer is required for the `pypi` environment, approve the run in the
    repository's *Actions* tab.
 
 ## How it was done
