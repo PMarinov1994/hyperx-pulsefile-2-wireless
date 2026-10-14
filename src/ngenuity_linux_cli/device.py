@@ -6,9 +6,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
-from ngenuity_linux.buttons import Assignment
-from ngenuity_linux.colors import Rgb
-from ngenuity_linux.protocol import (
+from ngenuity_linux_cli.buttons import Assignment
+from ngenuity_linux_cli.colors import Rgb
+from ngenuity_linux_cli.protocol import (
     ACK_STATUS_OFFSET,
     LIVE_SLOT,
     REPORT_SIZE,

@@ -2,8 +2,8 @@ import enum
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from ngenuity_linux.buttons import ENTRIES_PER_PAGE, ENTRY_SIZE, Assignment
-from ngenuity_linux.colors import Rgb
+from ngenuity_linux_cli.buttons import ENTRIES_PER_PAGE, ENTRY_SIZE, Assignment
+from ngenuity_linux_cli.colors import Rgb
 
 REPORT_SIZE = 64
 LIVE_SLOT = 0

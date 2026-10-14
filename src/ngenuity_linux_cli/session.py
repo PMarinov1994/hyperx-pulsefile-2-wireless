@@ -1,8 +1,8 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from ngenuity_linux.device import DeviceError, NoReplyError, Tracer, UniversalDevice
-from ngenuity_linux.devices import (
+from ngenuity_linux_cli.device import DeviceError, NoReplyError, Tracer, UniversalDevice
+from ngenuity_linux_cli.devices import (
     Category,
     Interface,
     Model,
@@ -10,7 +10,7 @@ from ngenuity_linux.devices import (
     list_interfaces,
     match_model,
 )
-from ngenuity_linux.protocol import DeviceInfo
+from ngenuity_linux_cli.protocol import DeviceInfo
 
 
 @dataclass(frozen=True)

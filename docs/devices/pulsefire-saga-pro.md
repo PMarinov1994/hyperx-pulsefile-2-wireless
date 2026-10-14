@@ -4,7 +4,7 @@
 |---|---|
 | USB | product ID not known yet (please report it, see the README) |
 | Protocol | [universal](../protocol/universal.md) (assumed: same NGENUITY configuration interfaces as the Haste 2 Wireless) |
-| ngenuity-linux status | **untested**, built from NGENUITY's decompiled configuration |
+| ngenuity-linux-cli status | **untested**, built from NGENUITY's decompiled configuration |
 | ngenuity name | `pulsefire-saga-pro` (select it with `ngenuity -d pulsefire-saga-pro …` until the product ID is known) |
 
 ## Capabilities (from NGENUITY's configuration)

@@ -4,7 +4,7 @@
 |---|---|
 | USB | product ID not known yet (please report it, see the README) |
 | Protocol | [universal](../protocol/universal.md) (assumed: same NGENUITY configuration interfaces as the Haste 2 Wireless) |
-| ngenuity-linux status | **untested**, built from NGENUITY's decompiled configuration |
+| ngenuity-linux-cli status | **untested**, built from NGENUITY's decompiled configuration |
 | ngenuity name | `pulsefire-saga` (select it with `ngenuity -d pulsefire-saga …` until the product ID is known) |
 
 ## Capabilities (from NGENUITY's configuration)
@@ -14,7 +14,7 @@
 - buttons: left, right, middle, back, forward
 - 5 RGB LEDs; software effects: breathing, solid, spectrum, wave
 
-> The Saga has 5 LEDs. ngenuity-linux sends the same colour to all 5 LEDs per frame (`R G B` × 5); this layout is a guess, NGENUITY can colour them individually.
+> The Saga has 5 LEDs. ngenuity-linux-cli sends the same colour to all 5 LEDs per frame (`R G B` × 5); this layout is a guess, NGENUITY can colour them individually.
 
 ## Supported commands
 

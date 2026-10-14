@@ -2,8 +2,8 @@ import enum
 from dataclasses import dataclass
 from pathlib import Path
 
-from ngenuity_linux.buttons import Button
-from ngenuity_linux.protocol import PollingRate
+from ngenuity_linux_cli.buttons import Button
+from ngenuity_linux_cli.protocol import PollingRate
 
 VENDOR_ID = 0x03F0
 VENDOR_USAGE_PAGE = b"\x06\x00\xff"

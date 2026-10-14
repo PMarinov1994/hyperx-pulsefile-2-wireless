@@ -1,18 +1,38 @@
 [project]
-name = "ngenuity-linux"
+name = "ngenuity-linux-cli"
 version = "0.1.0"
 description = "Configure HyperX peripherals supported by NGENUITY on Linux"
 readme = "README.md"
 authors = [
     { name = "PMarinov1994", email = "plamen_944@outlook.com" }
 ]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["hyperx", "ngenuity", "pulsefire", "mouse", "hid", "linux", "rgb"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+    "Typing :: Typed",
+]
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.5.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/PMarinov1994/ngenuity-linux-cli"
+Repository = "https://github.com/PMarinov1994/ngenuity-linux-cli"
+Issues = "https://github.com/PMarinov1994/ngenuity-linux-cli/issues"
+Documentation = "https://github.com/PMarinov1994/ngenuity-linux-cli/tree/master/docs"
+
 [project.scripts]
-ngenuity = "ngenuity_linux.cli:main"
+ngenuity = "ngenuity_linux_cli.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]

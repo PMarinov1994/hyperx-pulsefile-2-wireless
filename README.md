@@ -1,4 +1,4 @@
-# ngenuity-linux
+# ngenuity-linux-cli
 
 HyperX only provides its configuration software, NGENUITY, for Windows. This project
 reverse-engineers how NGENUITY talks to HyperX devices and provides `ngenuity`, a command-line tool
@@ -8,9 +8,9 @@ The first device, the **Pulsefire Haste 2 Wireless**, is fully supported and tes
 mice NGENUITY supports share its protocol and are implemented from NGENUITY's decompiled code,
 but are **untested**: if you own one, see [Testing untested hardware](#testing-untested-hardware).
 
-- Protocols: [docs/protocol](docs/protocol/README.md), with the full
-  [universal protocol](docs/protocol/universal.md) specification
-- Devices: [docs/devices](docs/devices/README.md), with one page per device listing its
+- Protocols: [docs/protocol](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/protocol/README.md), with the full
+  [universal protocol](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/protocol/universal.md) specification
+- Devices: [docs/devices](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/devices/README.md), with one page per device listing its
   capabilities and commands
 
 ## Installation
@@ -83,7 +83,7 @@ Buttons: `left`, `right`, `middle`, `back`, `forward`, `dpi` (depending on the m
 ### Done
 
 Tested on the Pulsefire Haste 2 Wireless; the other mice are implemented but untested
-([device list](docs/devices/README.md)).
+([device list](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/devices/README.md)).
 
 - **Status:** battery level, charging state, voltage, temperature; connection / sleep state.
 - **DPI:** up to 5 stages with DPI and indicator colour, active stage.
@@ -114,8 +114,8 @@ Tested on the Pulsefire Haste 2 Wireless; the other mice are implemented but unt
 | **Game Mode** (button action type) | Not investigated | A capture of NGENUITY assigning it |
 | **Launcher** (button starts a program) | Handled by NGENUITY on the PC, not by the device | A background service on Linux; not planned |
 | **Firmware version** in the device panel | Device ID shown; firmware version field in the device-info reply not located | A capture of NGENUITY's device panel |
-| **Keyboards, Clutch Talon** | Detected; commands for per-key lighting, layers, SOCD and calibration not implemented | Implementation from the [protocol](docs/protocol/universal.md), plus testing |
-| **Headsets, microphones, Clutch Tachi** | Use other protocols ([list](docs/protocol/README.md)) | Reverse engineering of those protocols |
+| **Keyboards, Clutch Talon** | Detected; commands for per-key lighting, layers, SOCD and calibration not implemented | Implementation from the [protocol](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/protocol/universal.md), plus testing |
+| **Headsets, microphones, Clutch Tachi** | Use other protocols ([list](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/protocol/README.md)) | Reverse engineering of those protocols |
 | **Firmware update** | Report IDs `F0`/`FA`/`FC` exist but are not decoded | Not planned: risk of bricking the device; use NGENUITY on Windows |
 | **Factory reset** | Decoded (`12 01`) | Deliberately not exposed; could be added behind a confirmation prompt |
 
@@ -156,6 +156,21 @@ Windows VM with the device passed through, and record the USB traffic on the Lin
 `usbmon` and `dumpcap`; the udev rule `50-usbmon-wireshark.rules` lets the `wireshark` group do this
 without root. Change one setting at a time and note the time of each change.
 
+## Releasing
+
+Releases are published to [PyPI](https://pypi.org/project/ngenuity-linux-cli/) by the GitHub workflow
+`.github/workflows/release.yml`, using PyPI's trusted publishing (no API token is stored anywhere).
+
+1. Set the new version in `pyproject.toml` (e.g. `uv version 0.2.0`) and commit it.
+2. Tag the commit with the same version and push the tag:
+   ```
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+3. The workflow checks that the tag matches the version, runs ruff and mypy, builds the package and
+   publishes it. If a reviewer is required for the `pypi` environment, approve the run in the
+   repository's *Actions* tab.
+
 ## How it was done
 
 1. **Extracted NGENUITY** from the installer and decompiled it:
@@ -174,9 +189,9 @@ without root. Change one setting at a time and note the time of each change.
 
 | Path | What it is |
 |---|---|
-| `src/ngenuity_linux/` | The `ngenuity` command-line tool |
-| [docs/protocol/](docs/protocol/README.md) | Protocol specifications |
-| [docs/devices/](docs/devices/README.md) | Supported devices, one page per device |
+| `src/ngenuity_linux_cli/` | The `ngenuity` command-line tool |
+| [docs/protocol/](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/protocol/README.md) | Protocol specifications |
+| [docs/devices/](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/devices/README.md) | Supported devices, one page per device |
 | `probe_readonly.py` | The read-only probe script used for the first tests |
 | `70-hyperx-pulsefire-haste2.rules` | udev rule that gives the logged-in user access to the Haste 2 Wireless dongle |
 | `50-usbmon-wireshark.rules` | udev rule that lets the `wireshark` group capture USB traffic |

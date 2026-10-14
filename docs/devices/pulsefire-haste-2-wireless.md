@@ -4,7 +4,7 @@
 |---|---|
 | USB | dongle `03f0:0f98`, vendor interface 2 (usage page `0xFF00`) |
 | Protocol | [universal](../protocol/universal.md) |
-| ngenuity-linux status | **tested**: every command marked ✔ was confirmed on the real mouse |
+| ngenuity-linux-cli status | **tested**: every command marked ✔ was confirmed on the real mouse |
 | ngenuity name | `pulsefire-haste-2-wireless` |
 
 ## Capabilities (from NGENUITY's `PulsefireHaste2WirelessConfiguration`)

@@ -6,9 +6,9 @@ from contextlib import contextmanager
 
 import click
 
-from ngenuity_linux import __version__
-from ngenuity_linux import lighting as effects
-from ngenuity_linux.buttons import (
+from ngenuity_linux_cli import __version__
+from ngenuity_linux_cli import lighting as effects
+from ngenuity_linux_cli.buttons import (
     ACTIONS,
     Action,
     Assignment,
@@ -16,10 +16,10 @@ from ngenuity_linux.buttons import (
     is_default,
     parse_action,
 )
-from ngenuity_linux.colors import Rgb
-from ngenuity_linux.device import DeviceError, NoReplyError, Tracer, UniversalDevice
-from ngenuity_linux.devices import MODELS, Effect, Model
-from ngenuity_linux.protocol import (
+from ngenuity_linux_cli.colors import Rgb
+from ngenuity_linux_cli.device import DeviceError, NoReplyError, Tracer, UniversalDevice
+from ngenuity_linux_cli.devices import MODELS, Effect, Model
+from ngenuity_linux_cli.protocol import (
     ACK_COMMAND_OFFSET,
     ACK_REPORT,
     ACK_STATUS_OFFSET,
@@ -47,7 +47,7 @@ from ngenuity_linux.protocol import (
     parse_event,
     percent_to_brightness,
 )
-from ngenuity_linux.session import Candidate, detect, select_candidates
+from ngenuity_linux_cli.session import Candidate, detect, select_candidates
 
 STREAM_INTERVAL = 1 / 15
 MIN_SHOWN_BYTES = 4

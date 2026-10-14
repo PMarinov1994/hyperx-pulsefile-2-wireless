@@ -1,7 +1,7 @@
 # Devices
 
 The devices NGENUITY 3.1.0 has a configuration for, the protocol each one uses, and its state in
-ngenuity-linux.
+ngenuity-linux-cli.
 
 The protocol column comes from the hub's protocol modules (see [protocols](../protocol/README.md)).
 "Universal (assumed)" means the device has no dedicated module, so it most likely uses the universal
@@ -41,4 +41,4 @@ supports them yet.
 | QuadCast 2 S, SoloCast 2, SoloCast 2 Pro, FlipCast (microphones) | to be determined | lighting, audio through NGENUITY's audio engine |
 
 Firmware updates for all devices use vendor libraries (Airoha, Sonix, Realtek) that are Windows-only;
-ngenuity-linux does not do firmware updates.
+ngenuity-linux-cli does not do firmware updates.
