@@ -113,6 +113,7 @@ Tested on the Pulsefire Haste 2 Wireless; the other mice are implemented but unt
 | **Text** (button types a text string) | Probably stored as a macro | Same capture as macros |
 | **Game Mode** (button action type) | Not investigated | A capture of NGENUITY assigning it |
 | **Launcher** (button starts a program) | Handled by NGENUITY on the PC, not by the device | A background service on Linux; not planned |
+| **Hardware lighting presets** | The firmware's Off, Solid, Breathing and Color Cycle (`42 02` modes 0, 1, 2, 4) work live on the Haste 2 Wireless ([protocol §3.1](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/protocol/universal.md)); NGENUITY does not use them and `ngenuity` does not expose them | A `lighting` option for them, and a test that a preset saved to slot 1 survives a power cycle |
 | **Firmware version** in the device panel | Device ID shown; firmware version field in the device-info reply not located | A capture of NGENUITY's device panel |
 | **Keyboards, Clutch Talon** | Detected; commands for per-key lighting, layers, SOCD and calibration not implemented | Implementation from the [protocol](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/protocol/universal.md), plus testing |
 | **Headsets, microphones, Clutch Tachi** | Use other protocols ([list](https://github.com/PMarinov1994/ngenuity-linux-cli/blob/master/docs/protocol/README.md)) | Reverse engineering of those protocols |

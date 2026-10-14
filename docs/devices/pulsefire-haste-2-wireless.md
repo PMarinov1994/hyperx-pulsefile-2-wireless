@@ -13,6 +13,7 @@
 - polling rate 125 / 250 / 500 / 1000 Hz; lift-off 1 mm / 2 mm; no motion sync, no angle snapping
 - buttons: left, right, middle, back, forward, DPI; action types Keys & Buttons, Macro, Text, Launcher, Game Mode
 - one RGB LED; software effects Alternating, Breathing, Confetti, Solid, Spectrum Wave, Sunrise, Wave; no hardware effects
+  in NGENUITY (the firmware does implement Off, Solid, Breathing and Color Cycle presets, see the lighting tests below)
 - wireless: battery, charging, sleep / wake, low-battery alert 5–25 %
 
 ## Supported commands
@@ -27,8 +28,9 @@
 | `36 01` / `36 02` | sensor settings (lift-off), write / read | ✔ |
 | `40 01` / `40 02` | brightness, write / read | ✔ |
 | `42 03` | lighting effect read | ✔ |
-| `44 02` | live colour | ✔ |
-| `44 03`, `44 04`, `42 02` | FrameLight effect upload | ✔ (live and saved) |
+| `44 02` | live colour (holds about 1.5–2 s per frame) | ✔ |
+| `44 03`, `44 04`, `42 02` | FrameLight effect upload, 1 to 80 frames | ✔ (live and saved) |
+| `42 02` modes 0, 1, 2, 4 | firmware presets Off, Solid, Breathing, Color Cycle | ✔ live; saved not tested; not used by ngenuity |
 | `20 05`, `20 01`, `20 02`, `20 03`, `20 04` | button remapping: reset, write, read | ✔ |
 | profile slot `1` of the commands above (`--save`) | onboard profile | ✔ (survives a power cycle) |
 | `22 xx` | macros | not decoded |
@@ -173,6 +175,32 @@ were all ACKed with status 00, and the LED showed solid red. When the stream sto
 Nothing is written to flash.
 
 **`44 03` / `44 04`: stored effect for onboard use** (sent only on Save, see the DPI table and save sequence above): header `44 03 50 50 00 01`, then 80 frames `44 04 <frame u16 LE> R G B`.
-This is presumably what the mouse plays on its own when NGENUITY is not running. The header bytes still need decoding:
-0x50 = 80 frames; the second 0x50 is speed?; `00 01` = slot 1?
+This is what the mouse plays on its own when NGENUITY is not running. The header is
+`<frames> <total packets u16> <profile u16>` (0x50 = 80 frames, 0x0050 = 80 packets, profile 1), see
+[universal §3.2](../protocol/universal.md).
+
+### Live lighting tests (2026-10-14, slot 0 only, nothing saved)
+
+Run from Linux with throw-away scripts writing raw hidraw reports; the user watched the LED. Starting state read
+back first: brightness `ff` and FrameLight duration 50 in both slots. Afterwards a power cycle of the mouse restored
+the stored colour cycle, so it reloads slot 1 into slot 0.
+
+**`44 02` hold time.** The same red frame streamed for 10 s with a fixed gap between frames:
+
+| Gap | LED |
+|---|---|
+| 0.5 s | solid red |
+| 1.0 s | solid red |
+| 1.5 s | solid red |
+| 2.0 s | flickers back to the stored effect between frames |
+
+A single frame holds for about 1.5–2 s. To keep a live colour up without NGENUITY's 15 Hz stream, resend it every
+0.5 s or faster.
+
+**`42 02` firmware presets.** Off, Solid and Breathing work as sent; Wave, Confetti and Alternating are stored and
+shown as Color Cycle. The duration is one byte (the high byte is dropped) and lower values are faster. Full table
+in [universal §3.1](../protocol/universal.md).
+
+**Short FrameLight tables.** A 1-frame upload (`44 03 01 01 00 00 00`, one `44 04`, `42 02 00 00 06 32 00`) and a
+2-frame upload both held their colour for the whole 10 s with nothing streaming.
 

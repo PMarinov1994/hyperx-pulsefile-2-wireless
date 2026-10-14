@@ -109,6 +109,32 @@ The Haste 2 report descriptor only declares report IDs `10 12 14 20 22 30 32 36 
 ```
 The Save in capture 2 sent `42 02 01 00 06 32 00`: profile 1, FrameLight, duration 50.
 
+`42 03 <profile>` reads the layer-1 setup back as `43 03 <mode> <duration u16> <direction> <colour type> <colours>`,
+i.e. the `42 02` payload from [4] on, without the profile bytes.
+
+**Firmware preset modes, tested on the Pulsefire Haste 2 Wireless (2026-10-14, live slot 0).**
+NGENUITY never sends these for this mouse (§5.5), but the firmware implements some of them. Each `42 02` below was
+ACKed with status 00 and answered with `43 02`; the "stored" column is what `42 03 00` read back right after, and
+"seen" is what the LED did.
+
+| Sent | Stored | Seen |
+|---|---|---|
+| `42 02 00 00 00` Off | mode 0 | LED off |
+| `42 02 00 00 01 00 00 00 01 ff 00 00` Solid, one colour | mode 1, `ff 00 00` | solid red |
+| `42 02 00 00 02 32 00 00 01 00 ff 00` Breath, one colour, duration 50 | mode 2, duration 50 | breathing green |
+| `42 02 00 00 02 d0 07 00 01 00 ff 00` Breath, duration 2000 | mode 2, duration **`d0 00`** = 208 | breathing green |
+| `42 02 00 00 03 32 00 00 fe` Wave, spectrum | **mode 4** | colour cycle |
+| `42 02 00 00 04 32 00 00 fe` ColorCycle, spectrum | mode 4 | colour cycle |
+| `42 02 00 00 05 32 00 00 ff` Confetti, random | **mode 4** | colour cycle |
+| `42 02 00 00 09 32 00 00 02 ff 00 00 00 00 ff` Alternating, two colours | **mode 4**, colours kept | colour cycle |
+
+* Usable hardware modes on this mouse: **0 Off, 1 Solid, 2 Breath, 4 ColorCycle**. Wave, Confetti and Alternating
+  are stored as ColorCycle.
+* **The duration is effectively one byte**: the high byte of the u16 is dropped (`d0 07` is stored as `d0 00`).
+* **Lower duration = faster** (Breath and ColorCycle at 10 vs. 255, judged by eye). The time unit is not measured yet.
+* The preset replaces the live effect and stays until something else is written or the mouse is power-cycled
+  (§5.3). Whether a preset written to profile 1 survives a power cycle is not tested yet; FrameLight does.
+
 ### 3.2 FrameLight upload (`DirectModeFrameLightData`, case `0x23`)
 ```
 44 03 <frames u8> <total packets u16> <profile u16> <u8>     header
@@ -116,6 +142,16 @@ The Save in capture 2 sent `42 02 01 00 06 32 00`: profile 1, FrameLight, durati
 42 02 <profile u16> 06 <duration u16> 00 …                 switch the profile to FrameLight
 ```
 Capture 2: `44 03 50 50 00 01 00` = 80 frames, 80 packets, profile 1. Then `44 04 0000 ff0000` … `44 04 004f …`, then `42 02 01 00 06 32 00`.
+
+**Short tables work (confirmed on the Haste 2 Wireless, 2026-10-14, live slot 0).** A single frame holds a static
+colour with nothing streaming, so a solid colour needs 3 packets instead of NGENUITY's 82:
+```
+44 03 01 01 00 00 00      1 frame, 1 packet, profile 0
+44 04 00 00 ff 00 ff      frame 0 = magenta          (mouse replies 45 04 00 00)
+42 02 00 00 06 32 00      FrameLight, duration 50    (mouse replies 43 02)
+```
+A 2-frame table (`44 03 02 02 00 00 00`, two `44 04` frames) also played steadily. Both colours stayed on for the
+whole 10 s observation.
 
 ### 3.3 Payloads decoded from captures
 
@@ -140,6 +176,10 @@ First decoded on the Pulsefire Haste 2 Wireless; the capture logs are in its
 
 **`44 02` live colour:** `44 02 00 00` then R, G, B per LED. The device shows it only while it keeps
 arriving (NGENUITY sends about 15 per second), then returns to its stored effect.
+**Hold time, measured on the Haste 2 Wireless (2026-10-14):** a stream of the same colour for 10 s with a fixed gap
+between frames stayed solid with gaps of 0.5, 1.0 and 1.5 s, and started flickering back to the stored effect at 2.0 s.
+A frame therefore holds for about 1.5–2 s; a tool that keeps a static live colour should resend it at least every
+0.5 s to have margin for packets lost over RF.
 
 **`51 02` battery reply** (to `50 02`): `[2]` level %, `[3]` charge status (0 not charging,
 1 charging, 2 full, 3 charger error, FF unknown), `[4..5]` temperature °C (i16 LE),
@@ -230,6 +270,8 @@ With byte 1 = `0x40|sub`, `0x80|sub` or `0xC0|sub`, B either rejects the packet 
 * Some commands are answered by the device itself with a `cmd+1, sub` report after the dongle ACK
   (`45 04` per FrameLight frame, `43 02` after `42 02`, `21 02` after a key page).
   **Wait for that reply before sending the next packet**: sending faster makes the device drop packets over RF.
+* Power-cycling the mouse (its switch) reloads the onboard profile 1 into the live profile 0. This undoes any live
+  lighting change (`42 02`, FrameLight, `44 02`) that was not saved, which makes it the recovery step after tests.
 
 ### 5.4 Reading settings back (confirmed from Linux 2026-10-13, mouse awake)
 
@@ -240,7 +282,7 @@ These queries were found by the binary extraction (§3). The mouse answers each 
 | `32 02 <profile>` | `33 02 08 1f 02 07 00 ff 00 00 0f 00 00 00 ff 1f 00 ff ff 00 3f 00 00 ff 00 7f 00 ff ff ff` | the `32 01` payload without the profile: [2] polling-rate code, [3] enabled-stage mask, [4] active stage, [5+5i..] stage i = u16 DPI code + RGB |
 | `36 02 <profile>` | `37 02 00 …` | [2] angle_snap, [3] angle_tune, [4] angle_tune_enable, **[5] lift-off** (00 = 1 mm, 02 = 2 mm; confirmed: `37 02 00 00 00 02` after `36 01 … 02`), [6] motion_sync. Same layout as the `36 01` payload without the profile |
 | `40 02 <profile>` | `41 02 ff` | [2] brightness 0–255 |
-| `42 03 <profile>` | `43 03 06 32 00` | [2] layer-1 mode (6 = FrameLight), [3..4] duration (50) |
+| `42 03 <profile>` | `43 03 06 32 00` | [2] layer-1 mode (6 = FrameLight), [3..4] duration (50), [5] direction, [6] colour type, [7..] colours (§3.1) |
 
 Profile 0 and profile 1 returned identical data. While the mouse sleeps, only the dongle ACK comes back.
 
@@ -248,6 +290,7 @@ Profile 0 and profile 1 returned identical data. While the mouse sleeps, only th
 
 `PulsefireHaste2WirelessConfiguration` lists only **software** effects: Alternating, Breathing, Confetti, Solid, SpectrumWave, Sunrise and Wave.
 `GetSupportHWEffects` throws NotImplemented, so the firmware's built-in preset modes (Breath, Wave, ColorCycle, …) are not used for this mouse.
+The firmware still implements Off, Solid, Breath and ColorCycle; see the test in §3.1.
 NGENUITY sends the effect description to the Rust light engine, which renders colours in real time. They are streamed live as `44 02`, and on Save one cycle is uploaded as FrameLight (§3.2).
 
 Speed: `period_ms = max − speed% × (max − min)`.
