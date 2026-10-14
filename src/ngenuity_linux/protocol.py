@@ -2,8 +2,8 @@ import enum
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from pulsefire.buttons import ENTRIES_PER_PAGE, ENTRY_SIZE, Assignment
-from pulsefire.colors import Rgb
+from ngenuity_linux.buttons import ENTRIES_PER_PAGE, ENTRY_SIZE, Assignment
+from ngenuity_linux.colors import Rgb
 
 REPORT_SIZE = 64
 LIVE_SLOT = 0
@@ -11,8 +11,8 @@ SAVED_SLOT = 1
 BASE_LAYER = 1
 KEY_PAGE_HEADER = 4
 
-DPI_MIN = 100
-DPI_MAX = 26000
+DPI_MIN = 50
+DPI_MAX = 42000
 DPI_STEP = 50
 MAX_STAGES = 5
 MAX_STAGE_SLOTS = 11
@@ -21,6 +21,10 @@ BRIGHTNESS_MAX = 100
 BRIGHTNESS_RAW_MAX = 0xFF
 MIN_EVENT_LENGTH = 3
 MAX_FRAMES = 255
+CATEGORY_OFFSET = 31
+PRODUCT_IDS_START = 37
+PRODUCT_IDS_END = 47
+FRAME_DATA_SIZE = REPORT_SIZE - 4
 BATTERY_ALERT_MIN = 5
 BATTERY_ALERT_MAX = 25
 
@@ -78,6 +82,9 @@ class PollingRate(enum.IntEnum):
     HZ_250 = 250
     HZ_500 = 500
     HZ_1000 = 1000
+    HZ_2000 = 2000
+    HZ_4000 = 4000
+    HZ_8000 = 8000
 
     @property
     def code(self) -> int:
@@ -97,6 +104,9 @@ _POLLING_CODES: dict[PollingRate, int] = {
     PollingRate.HZ_250: 0x20,
     PollingRate.HZ_500: 0x10,
     PollingRate.HZ_1000: 0x08,
+    PollingRate.HZ_2000: 0x04,
+    PollingRate.HZ_4000: 0x02,
+    PollingRate.HZ_8000: 0x01,
 }
 
 
@@ -193,8 +203,9 @@ class Battery:
 @dataclass(frozen=True)
 class DeviceInfo:
     device_id: str
+    category: int
     vendor_id: int
-    product_id: int
+    product_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -358,16 +369,22 @@ def parse_key_page(report: bytes) -> list[Assignment]:
     return assignments
 
 
-def encode_frame_light(colors: list[Rgb], speed: int, slot: int) -> list[bytes]:
+def encode_frame_light(colors: list[Rgb], speed: int, slot: int, leds: int = 1) -> list[bytes]:
     if not 1 <= len(colors) <= MAX_FRAMES:
         msg = f"between 1 and {MAX_FRAMES} frames are supported"
         raise ValueError(msg)
-    count = len(colors)
-    header = bytes([count]) + count.to_bytes(2, "little") + slot.to_bytes(2, "little")
+    chunks: list[bytes] = []
+    for color in colors:
+        frame = color.to_bytes() * leds
+        chunks += [
+            frame[start : start + FRAME_DATA_SIZE]
+            for start in range(0, len(frame), FRAME_DATA_SIZE)
+        ]
+    header = bytes([len(colors)]) + len(chunks).to_bytes(2, "little") + slot.to_bytes(2, "little")
     packets = [Command.FRAME_HEADER.packet(header)]
     packets += [
-        Command.FRAME_DATA.packet(index.to_bytes(2, "little") + color.to_bytes())
-        for index, color in enumerate(colors)
+        Command.FRAME_DATA.packet(index.to_bytes(2, "little") + chunk)
+        for index, chunk in enumerate(chunks)
     ]
     mode = slot.to_bytes(2, "little") + bytes([LightingMode.FRAME_LIGHT])
     packets.append(Command.LIGHTING_PRESET.packet(mode + speed.to_bytes(2, "little")))
@@ -383,8 +400,8 @@ def encode_battery_alert(threshold: int, *, save: bool) -> bytes:
     return Command.BATTERY_ALERT.packet(bytes([threshold, int(save)]))
 
 
-def encode_live_color(color: Rgb) -> bytes:
-    return Command.LIVE_COLOR.packet(b"\x00\x00" + color.to_bytes())
+def encode_live_color(color: Rgb, leds: int = 1) -> bytes:
+    return Command.LIVE_COLOR.packet(b"\x00\x00" + color.to_bytes() * leds)
 
 
 def is_ack_for(report: bytes, command: Command) -> bool:
@@ -415,10 +432,15 @@ def parse_connection(report: bytes) -> bool:
 
 
 def parse_device_info(report: bytes) -> DeviceInfo:
+    ids = (
+        int.from_bytes(report[offset : offset + 2], "little")
+        for offset in range(PRODUCT_IDS_START, PRODUCT_IDS_END, 2)
+    )
     return DeviceInfo(
         device_id=report[2:14].hex(),
+        category=report[CATEGORY_OFFSET],
         vendor_id=int.from_bytes(report[35:37], "little"),
-        product_id=int.from_bytes(report[45:47], "little"),
+        product_ids=tuple(value for value in ids if value),
     )
 
 

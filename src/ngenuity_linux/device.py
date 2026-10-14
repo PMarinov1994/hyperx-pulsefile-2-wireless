@@ -6,9 +6,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
-from pulsefire.buttons import Assignment
-from pulsefire.colors import Rgb
-from pulsefire.protocol import (
+from ngenuity_linux.buttons import Assignment
+from ngenuity_linux.colors import Rgb
+from ngenuity_linux.protocol import (
     ACK_STATUS_OFFSET,
     LIVE_SLOT,
     REPORT_SIZE,
@@ -41,10 +41,6 @@ from pulsefire.protocol import (
     profile_query,
 )
 
-VENDOR_ID = 0x03F0
-PRODUCT_ID = 0x0F98
-VENDOR_USAGE_PAGE = b"\x06\x00\xff"
-HID_DEVICES = Path("/sys/bus/hid/devices")
 MIN_SEND_INTERVAL = 0.010
 DEFAULT_TIMEOUT = 0.5
 FLUSH_SECONDS = 0.05
@@ -54,31 +50,14 @@ class DeviceError(Exception):
     pass
 
 
-class DeviceNotFoundError(DeviceError):
-    pass
-
-
 class NoReplyError(DeviceError):
     pass
-
-
-def find_hidraw() -> Path:
-    marker = f"{VENDOR_ID:04X}:{PRODUCT_ID:04X}"
-    for device in sorted(HID_DEVICES.glob(f"*{marker}*")):
-        descriptor = (device / "report_descriptor").read_bytes()
-        if not descriptor.startswith(VENDOR_USAGE_PAGE):
-            continue
-        nodes = sorted((device / "hidraw").iterdir())
-        if nodes:
-            return Path("/dev") / nodes[0].name
-    msg = "HyperX Pulsefire Haste 2 Wireless dongle (03f0:0f98) not found"
-    raise DeviceNotFoundError(msg)
 
 
 type Tracer = Callable[[str, bytes], None]
 
 
-class Dongle:
+class UniversalDevice:
     def __init__(self, path: Path, trace: Tracer | None = None) -> None:
         self.path = path
         self.trace = trace
@@ -86,10 +65,10 @@ class Dongle:
         self._last_send = 0.0
 
     @classmethod
-    def open(cls, path: Path | None = None, trace: Tracer | None = None) -> Self:
-        dongle = cls(path or find_hidraw(), trace)
-        dongle.connect()
-        return dongle
+    def open(cls, path: Path, trace: Tracer | None = None) -> Self:
+        device = cls(path, trace)
+        device.connect()
+        return device
 
     def connect(self) -> None:
         try:
@@ -118,7 +97,7 @@ class Dongle:
     @property
     def fd(self) -> int:
         if self._fd is None:
-            msg = "dongle is not open"
+            msg = "device is not open"
             raise DeviceError(msg)
         return self._fd
 
@@ -169,7 +148,7 @@ class Dongle:
             if is_ack_for(report, command):
                 if report[ACK_STATUS_OFFSET] != 0:
                     msg = (
-                        f"dongle rejected {command.name} (status {report[ACK_STATUS_OFFSET]:#04x})"
+                        f"device rejected {command.name} (status {report[ACK_STATUS_OFFSET]:#04x})"
                     )
                     raise DeviceError(msg)
                 acknowledged = True
@@ -194,8 +173,11 @@ class Dongle:
         msg = f"no reply to {command.name}"
         raise NoReplyError(msg)
 
-    def is_mouse_connected(self) -> bool:
-        return parse_connection(self.query(Command.CONNECTION))
+    def is_awake(self) -> bool:
+        try:
+            return parse_connection(self.query(Command.CONNECTION))
+        except NoReplyError:
+            return True
 
     def battery(self) -> Battery:
         return parse_battery(self.query(Command.BATTERY))
@@ -241,8 +223,10 @@ class Dongle:
     def set_battery_alert(self, threshold: int, *, save: bool) -> None:
         self.execute(Command.BATTERY_ALERT, encode_battery_alert(threshold, save=save))
 
-    def set_frame_light(self, colors: list[Rgb], speed: int, slot: int = LIVE_SLOT) -> None:
-        header, *data, mode = encode_frame_light(colors, speed, slot)
+    def set_frame_light(
+        self, colors: list[Rgb], speed: int, slot: int = LIVE_SLOT, leds: int = 1
+    ) -> None:
+        header, *data, mode = encode_frame_light(colors, speed, slot, leds)
         self.execute(Command.FRAME_HEADER, header)
         for packet in data:
             self.execute(Command.FRAME_DATA, packet, await_reply=True)

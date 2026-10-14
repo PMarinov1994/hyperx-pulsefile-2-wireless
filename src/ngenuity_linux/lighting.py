@@ -3,7 +3,7 @@ import math
 import secrets
 from collections.abc import Callable, Sequence
 
-from pulsefire.colors import Rgb
+from ngenuity_linux.colors import Rgb
 
 FRAME_COUNT = 80
 DEFAULT_SPEED = 50

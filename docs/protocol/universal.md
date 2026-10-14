@@ -1,4 +1,4 @@
-# HyperX NGENUITY "universal" HID protocol — Pulsefire Haste 2 Wireless (03f0:0f98)
+# NGENUITY "universal" HID protocol
 
 Status: **draft from static analysis** of NGENUITY 3.1.0. The request side is decoded from
 the binary. Response layouts still have to be confirmed on the device with `probe_readonly.py`.
@@ -50,7 +50,7 @@ The Haste 2 report descriptor only declares report IDs `10 12 14 20 22 30 32 36 
 
 | cmd sub | case | Request (FlatBuffers type) | Payload (byte offsets) |
 |---|---|---|---|
-| **10 01** ✔ | 00 | DeviceInformation | – (reply `11 01`, §5.3) |
+| **10 01** ✔ | 00 | DeviceInformation | – (reply `11 01`, see the [device notes](../devices/pulsefire-haste-2-wireless.md)) |
 | **10 02** | 01 | DeviceSerialNumberRequest | – |
 | **12 01** | 02 | DeviceFactoryReset | [2] u8. **Never send** |
 | **14 01** | 03 | CurrentProfileSetup | [2..3] reset_profile u16, [4] reset_profile_state, [5] switching_profile |
@@ -69,9 +69,9 @@ The Haste 2 report descriptor only declares report IDs `10 12 14 20 22 30 32 36 
 | **22 07** ✔ | 10 | ResetMacroKeyAssignmentSettings | [2..3] profile, [4] reset_mcu |
 | 24 02/03, 24 06 | 11, 12 | KeyPressAndReleaseSetup / ResetKeyPressAndRelease | |
 | 26 01/03/04/05 | 13–16 | SOCDSetup / GetTotalDataPages / SettingsInformation / ResetSOCD | |
-| **32 01** ✔ | 17 | DPISettings | §5.5 |
+| **32 01** ✔ | 17 | DPISettings | §3.3 |
 | **32 02** | 18 | DPISettings information request | [2] profile |
-| **36 01** ✔ | 19 | SensorAdditionalCustomization | [2..3] profile, [4] angle_snap, [5] angle_tune, [6] angle_tune_enable, [7] lift_distance, [8] motion_sync |
+| **36 01** ✔ | 19 | SensorAdditionalCustomization | §3.3 |
 | **36 02** | 1a | SensorAdditionalCustomization information request | [2] profile |
 | **36 03** | 1b | MouseSensorLiftCalibrationRequest | [2..3] profile, [4] state, [5] lift_calibration_parameter |
 | **36 04** | 1c | MouseSensorLiftCalibrationStatusRequest | [2] profile |
@@ -84,7 +84,7 @@ The Haste 2 report descriptor only declares report IDs `10 12 14 20 22 30 32 36 
 | **44 03 / 44 04** ✔ | 23 | LightingEffectControlDirectModeFrameLightData | §3.2 |
 | 46 03..06 | 24–27 | Ambient light config/status, light-enable config/status | |
 | **50 01** ✔ | 28 | WirelessRFBatteryConfiguration | [2] low_battery_warning_threshold (%, NGENUITY slider 5–25, default 10), [3] save_threshold_to_device. Not reported back: byte [10] of `51 02` stays 0 |
-| **50 02** ✔ | 29 | WirelessRFBatteryInformation | – (reply `51 02`, §5.4) |
+| **50 02** ✔ | 29 | WirelessRFBatteryInformation | – (reply `51 02`, §3.3) |
 | **52 01** ✔ | 2a | WirelessRFConnectionStatus | – (reply `53 01 <connected>`) |
 | 54 01 / 54 02 | 2b, 2c | WirelessRFDeviceSleepTimeConfiguration (u32 profile, u32 time) / information request | not declared by this mouse |
 | – | 2d–48 | audio (input/output level, mute, EQ, monitoring, chat-mix, …) | log "Universal Audio Coming Soon" |
@@ -116,6 +116,36 @@ The Save in capture 2 sent `42 02 01 00 06 32 00`: profile 1, FrameLight, durati
 42 02 <profile u16> 06 <duration u16> 00 …                 switch the profile to FrameLight
 ```
 Capture 2: `44 03 50 50 00 01 00` = 80 frames, 80 packets, profile 1. Then `44 04 0000 ff0000` … `44 04 004f …`, then `42 02 01 00 06 32 00`.
+
+### 3.3 Payloads decoded from captures
+
+First decoded on the Pulsefire Haste 2 Wireless; the capture logs are in its
+[device notes](../devices/pulsefire-haste-2-wireless.md).
+
+**`32 01` DPI table** (`32 02 <profile>` reads it back as `33 02` without the two profile bytes):
+```
+[2..3]  profile slot u16 LE (0 = live, 1 = onboard profile written on Save)
+[4]     polling rate: 01 = 8000, 02 = 4000, 04 = 2000, 08 = 1000, 10 = 500, 20 = 250, 40 = 125 Hz
+[5]     enabled-stage bitmask, bit i = stage i
+[6]     active stage (0-based)
+[7+5i]  stage i: u16 LE code = DPI/50 - 1, then R, G, B (stage indicator colour)
+```
+
+**`36 01` sensor settings** (`36 02 <profile>` reads them back as `37 02` without the profile bytes):
+`[2..3]` profile, `[4]` angle snap, `[5]` angle tune, `[6]` angle tune enable,
+**`[7]` lift-off: 00 = 1 mm, 02 = 2 mm**, `[8]` motion sync.
+
+**`40 01` brightness:** `[2..3]` profile, `[4]` brightness 0–255 (NGENUITY sends percent × 255 / 100).
+`40 02 <profile>` → `41 02 <brightness>`.
+
+**`44 02` live colour:** `44 02 00 00` then R, G, B per LED. The device shows it only while it keeps
+arriving (NGENUITY sends about 15 per second), then returns to its stored effect.
+
+**`51 02` battery reply** (to `50 02`): `[2]` level %, `[3]` charge status (0 not charging,
+1 charging, 2 full, 3 charger error, FF unknown), `[4..5]` temperature °C (i16 LE),
+`[6..7]` voltage mV (u16 LE), `[8]` gauge chip type, `[9]` charger chip type.
+
+**`53 01` connection** (to `52 01`): `[2]` = 1 connected, 0 asleep or off.
 
 ## 4. Button remapping (`20 xx`, GeneralKeyAssignment)
 
@@ -160,7 +190,11 @@ Restored with entry `01 08 08 01`; afterwards both reads came back empty, so the
 
 **Saving (NGENUITY `ApplyAndSaveKeyAssignment`):** the same sequence with profile `1` and `reset_mcu = 1`, i.e. `20 05 01 00 01`, then `20 01 01 00 …` / `20 02 …`.
 
-## 5. Confirmed on the device (2026-10-12, `/dev/hidraw4`, NGENUITY/Wine stopped)
+## 5. Protocol behaviour
+
+These rules were established on the Pulsefire Haste 2 Wireless
+([device notes](../devices/pulsefire-haste-2-wireless.md)). They are expected to hold for every
+device that uses this protocol.
 
 ### 5.1 ACK report `0xFF` (sent for every command)
 ```
@@ -186,132 +220,18 @@ ID B is also the `device_id` inside DeviceInformation.
 With byte 1 = `0x40|sub`, `0x80|sub` or `0xC0|sub`, B either rejects the packet (status 01) or returns an all-zero reply.
 **Use target 0 (plain sub) for this dongle.**
 
-### 5.3 Replies
+### 5.3 Events, sleep and pacing
 
-| Request | Reply |
-|---|---|
-| `10 01` DeviceInformation | `11 01` + data, see below |
-| `10 02` SerialNumber | only the ACK from A; no data within 2 s |
-| `14 02` CurrentProfileInformation | `15 02` all zeros (profile 0?) |
-| `20 03 00 00` DPISettingsInformation | `21 03` all zeros |
-| `50 03` | ACK from B with status 01, no data. **Not the battery query**: NGENUITY uses `50 02` (§5.4) |
-| `52 01` RFConnectionStatus | `53 01 01` → **connected = 1**, followed by an unsolicited `fb 07` report |
+* Unsolicited reports (report ID `0xFB`): `fb 0a <0|1>` link lost / restored (wireless sleep and wake),
+  `fb 08 <stage> <dpi code u16>` active DPI stage changed, `fb 01 <button> 00 <0|1>` button released / pressed.
+  The mouse also sends `51 02` (battery) by itself right after waking.
+* A command sent while a wireless device sleeps is queued by the dongle and delivered on wake-up.
+  Tools should check `52 01` first and wait for `fb 0a 01`.
+* Some commands are answered by the device itself with a `cmd+1, sub` report after the dongle ACK
+  (`45 04` per FrameLight frame, `43 02` after `42 02`, `21 02` after a key page).
+  **Wait for that reply before sending the next packet**: sending faster makes the device drop packets over RF.
 
-DeviceInformation `11 01` layout (tentative field names, taken from the FlatBuffers `DeviceInformation` field order):
-```
-off  bytes                               value / guess
- 2   04 b0 ae 51 2a 79 26 36 e6 ad 30 58 device_id (12 B)
-14   00 x16                              firmware version strings? (empty)
-31   02                                  category = Mouse (ProductCategory 2)
-35   f0 03                               usb_vendor_id 0x03F0
-37   97 0e                               0x0E97  (bootloader PID?)
-39   99 01                               0x0199  (version / PID?)
-41   97 0d                               0x0D97  (PID?)
-43   09 11                               0x1109  (version?)
-45   98 0f                               0x0F98  primary_usb_product_id (dongle PID)
-50   01                                  current_mode?
-52   ff                                  country_code = Unknown
-53   82 01 07 eb 1e 00 00 06             mcu_vendor / support_features?
-```
-
-### 5.4 NGENUITY capture (`captures/ngenuity1.pcapng`, VM via VirtualBox, no settings changed)
-
-Commands NGENUITY sends at startup and after every reconnect, in this order:
-`10 01`, `14 02` (startup only), `52 01`, `50 02` ×3, `40 01 00 00 82`, `36 01`, `32 01 …`, `20 05`, `22 07`.
-After that it polls `52 01` every 5 s and `44 02 00 00 f2` about 15 times per second.
-
-**Battery: request `50 02`** (no payload) → reply `51 02` from the mouse. Field order is the same as FlatBuffers `WirelessRFBatteryInformation`:
-```
-off  example  field
- 2   36       battery_level  = 54 %
- 3   00       charge_status  0 NoCharging, 1 Charging, 2 FullyCharged, 3 ChargerError, FF Unknown
-                              (confirmed from Linux 2026-10-13: 00 → 01 after plugging in USB, voltage 3838 → 3996 mV)
- 4   1a 00    temperature    i16 LE = 26 °C
- 6   00 0f    voltage        u16 LE = 0x0F00 = 3840 mV (later 0x0F01 = 3841 mV)
- 8   01       gauge_ic_type  1 = Cellwise
- 9   00       charger_ic_type 0 = TI
-10   00       low_battery_warning_threshold
-```
-The mouse also sends `51 02` unsolicited right after it wakes up. While the mouse sleeps, `50 02` gets only the dongle ACK.
-
-**Connection status: `52 01` → `53 01 <connected>`** (confirmed, polled every 5 s by NGENUITY).
-
-**Unsolicited link event `fb 0a <state>`**: `01` = mouse linked (woke up / switched on), `00` = link lost (sleep / off).
-Timeline in the capture: `fb 0a 00` at 29.5 s (mouse asleep) → `53 01 00` replies → mouse moved: `fb 0a 01` at 143.4 s plus unsolicited battery → `53 01 01` → asleep `fb 0a 00` at 228.8 s → `fb 0a 01` at 232.0 s.
-On every `fb 0a 01`, NGENUITY re-runs the startup sequence above.
-
-**Queued commands:** a command sent while the mouse sleeps is delivered after wake-up. The mouse ACK for the `32 01` sent at 94.0 s arrived at 143.45 s, right after the wake event.
-
-### 5.5 DPI table and save sequence (`captures/ngenuity2.pcapng`: new 6400 DPI stage, save, DPI-button presses)
-
-**`32 01`: full DPI table** (built by `FUN_1400c9120`, confirmed by capture):
-```
-[0]=32 [1]=01
-[2..3]  profile slot u16 LE (0 = live/active, 1 = onboard slot written on Save)
-[4]     polling rate (UniversalPollingRate): 08 = 1000 Hz, 10 = 500 Hz, 20 = 250 Hz, 40 = 125 Hz  (confirmed 08<->20 in ngenuity4)
-[5]     enabled-stage bitmask, bit i = stage i   (0x0f = 4 stages, 0x1f = 5 stages)
-[6]     current stage index (0-based)
-[7+5i .. 11+5i]  stage i, i = 0..10:  u16 LE code = DPI/50 - 1,  then R, G, B (stage indicator colour)
-```
-Example after adding the stage: `400 #ff0000, 800 #0000ff, 1600 #ffff00, 3200 #00ff00, 6400 #ffffff`, mask `1f`.
-NGENUITY sends `32 01` (slot 0) live on every UI edit, before Save.
-**Confirmed from Linux (2026-10-13):** the slot-0 table with stage 2 set to code `01` (100 DPI, below NGENUITY's 200 minimum) and then `47` (3600 DPI) changed the cursor speed noticeably each time.
-Restoring it with the original table (code `1f`, 1600) worked. Only the dongle ACK comes back; the mouse sends no reply of its own. While the user was editing, stage 2 briefly passed through 12000, 3500 and 1650 before going back to 1600.
-
-**DPI-button events (unsolicited, from the mouse):**
-* `fb 01 20 00 01` / `fb 01 20 00 00`: button 0x20 (the DPI button) pressed / released.
-* `fb 08 <stage> <code lo> <code hi>`: active DPI stage changed. DPI = (code+1)*50. Seen: `fb 08 03 3f 00` = stage 3, 3200 DPI, etc.
-
-**Save to onboard slot 1** (all with [2..3] = slot 1):
-```
-44 03 50 50 00 01            lighting effect header? (0x50 = 80 frames)
-44 04 <frame u16> R G B      × 80: a colour-cycle table (red→green→blue→red), one frame per packet, mouse replies 45 04 <frame>
-42 02 01 00 06 32            ? (reply 43 02 01)
-40 01 01 00 ff               ?
-36 01 01                     ?
-32 01 01 00 …                DPI table (above)
-20 05 01 00 01               ?
-22 07 01 00 01               ?
-50 01 0a 01                  battery config: low-battery warning 10 %? [3]=01 ?
-```
-After the save, NGENUITY re-sends the slot-0 set (`40 01 00 00 ff`, `36 01`, `32 01 00 …`, `20 05`, `22 07`).
-The startup `20 05` / `22 07` without arguments are probably "apply slot 0" or a sync; still unknown.
-
-The cmd→meaning labels in §3 came from the static mapping, and they are wrong for at least `32` and `50`. Trust §5.4/§5.5 over §3.
-
-### 5.6 Sensor settings `36 01` (`captures/ngenuity5.pcapng`, lift-off Low/High, no Save)
-
-```
-[0]=36 [1]=01
-[2..3] profile slot u16 LE
-[4]    angle_snap_enable       (bool)          \
-[5]    angle_tune_config       (0, 15, 30, E2=-30, F6=-10)  |  field order from FlatBuffers
-[6]    angle_tune_enable       (bool)           |  SensorAdditionalCustomization;
-[7]    lift_distance_config    00 = 1 mm (Low), 02 = 2 mm (High)   <- confirmed
-[8]    motion_sync_enable      (bool)          /
-```
-Only [7] has been seen to change (`36 01 00 00 00 00 00 02` = High, `36 01` with zero payload = Low).
-Every change in the UI makes NGENUITY re-send the whole slot-0 set `40 01, 36 01, 32 01, 20 05, 22 07`.
-Changing the polling rate sent only `32 01` with the new [4]. Both changes are live and need no Save.
-
-### 5.7 Lighting (`captures/ngenuity6.pcapng`, brightness low → high, no Save)
-
-**`40 01`: LED brightness**: `40 01 <slot u16 LE> <brightness>`. The value is NGENUITY's slider value passed straight through as a byte
-(`LightsSWControlViewModel.OnGlobalBrightnessChanged` → `SetBrightness(BaseId, (byte)value)`).
-The UI slider is a 0–100 % value (`GlobalBrightness`, default 100). On the wire it is scaled to 0–255, **byte = floor(percent × 255 / 100)**:
-1 % → `02`, 51 % → `82`, 100 % → `ff` (all three seen in captures). Confirmed from Linux 2026-10-13: `02` dims and `ff` restores (live slot 0). The full range was verified with a solid `44 02` colour streamed: 0 % (`00`) = LED off, 25/50/75/100 % visibly brighter at each step. Brightness also applies to live-streamed colours. The colours streamed in `44 02` stay at full intensity, so the mouse applies the brightness itself.
-
-**`44 02`: live colour frame**: `44 02 00 00 R G B`, streamed about 15 times per second while NGENUITY runs (software lighting effect, here a rainbow).
-The mouse replies `45 02` (zeros). The startup `44 02 00 00 f2` from capture 1 was just a colour frame (R=f2) too.
-**Confirmed from Linux (2026-10-13):** single `44 02 00 00 R G B` frames (red, green, blue, 4 s apart) and a 10 s stream of red at about 15 Hz
-were all ACKed with status 00, and the LED showed solid red. When the stream stops, the mouse goes back to its stored onboard effect by itself.
-Nothing is written to flash.
-
-**`44 03` / `44 04`: stored effect for onboard use** (sent only on Save, §5.5): header `44 03 50 50 00 01`, then 80 frames `44 04 <frame u16 LE> R G B`.
-This is presumably what the mouse plays on its own when NGENUITY is not running. The header bytes still need decoding:
-0x50 = 80 frames; the second 0x50 is speed?; `00 01` = slot 1?
-
-### 5.8 Reading settings back (confirmed from Linux 2026-10-13, mouse awake)
+### 5.4 Reading settings back (confirmed from Linux 2026-10-13, mouse awake)
 
 These queries were found by the binary extraction (§3). The mouse answers each one with `cmd+1, sub`.
 
@@ -324,7 +244,7 @@ These queries were found by the binary extraction (§3). The mouse answers each 
 
 Profile 0 and profile 1 returned identical data. While the mouse sleeps, only the dongle ACK comes back.
 
-### 5.9 Software lighting effects (light engine `hxn-srv-light-engine.exe`)
+### 5.5 Software lighting effects (light engine `hxn-srv-light-engine.exe`)
 
 `PulsefireHaste2WirelessConfiguration` lists only **software** effects: Alternating, Breathing, Confetti, Solid, SpectrumWave, Sunrise and Wave.
 `GetSupportHWEffects` throws NotImplemented, so the firmware's built-in preset modes (Breath, Wave, ColorCycle, …) are not used for this mouse.
@@ -369,8 +289,8 @@ Re-rendering it with the formula above reproduces every frame within ±2 per cha
 `pulsefire lighting rainbow --save` then restored the original stored cycle (byte-identical to NGENUITY's Save).
 
 ## 6. Open items
-1. ~~Battery query~~. Done: it is `50 02` (§5.4). My static sub mapping for cmd 0x50 was off by one, so the other static sub numbers in §3 also need checking against captures.
-5. Meaning of B-ACK status `01`. For `32 01` it looks like "done" rather than "rejected" (§5.4), so the §5.1 reading may be wrong.
+1. ~~Battery query~~. Done: it is `50 02`. My static sub mapping for cmd 0x50 was off by one, so the other static sub numbers in §3 also need checking against captures.
+5. Meaning of B-ACK status `01`. For `32 01` it looks like "done" rather than "rejected", so the §5.1 reading may be wrong.
 6. Startup commands with unknown meaning: `40 01 00 00 82` / `40 01 00 00 ff`, `32 01 00 00 08 01 01 1f 00 ff ff`, `36 01`, `20 05`, `22 07`, and `44 02 00 00 f2` (polled about 15×/s, mouse replies `45 02` all zeros). Some of these may be writes of NGENUITY's stored profile, so don't replay them until they are understood.
 2. ~~Which ID is dongle/mouse~~. Done: A = dongle, B = mouse (§5.1).
 3. Exact meaning of the DPI entry kinds 1, 2, 4, 5, 6 and header byte [5]. Compare a device readback (`20 04`) with what NGENUITY sends.

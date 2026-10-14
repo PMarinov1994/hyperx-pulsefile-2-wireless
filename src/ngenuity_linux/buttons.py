@@ -174,11 +174,11 @@ def parse_action(text: str) -> Action:
     if name.startswith("key:"):
         key = name.removeprefix("key:")
         if key not in KEYBOARD_KEYS:
-            msg = f"unknown key {key!r}, see 'pulsefire button --help' for the key names"
+            msg = f"unknown key {key!r}, see 'ngenuity button --help' for the key names"
             raise ValueError(msg)
         return keyboard_action(KEYBOARD_KEYS[key])
     if name not in ACTIONS:
-        msg = f"unknown action {text!r}, see 'pulsefire button --help' for the action names"
+        msg = f"unknown action {text!r}, see 'ngenuity button --help' for the action names"
         raise ValueError(msg)
     return ACTIONS[name]
 
